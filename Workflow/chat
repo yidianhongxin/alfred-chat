@@ -1,0 +1,318 @@
+#!/usr/bin/osascript -l JavaScript
+
+// Helpers
+function envVar(varName) {
+  return $.NSProcessInfo
+    .processInfo
+    .environment
+    .objectForKey(varName).js
+}
+
+function fileExists(path) {
+  return $.NSFileManager.defaultManager.fileExistsAtPath(path)
+}
+
+function fileModified(path) {
+  const attributes = $.NSFileManager.defaultManager
+    .attributesOfItemAtPathError(path, undefined)
+
+  if (!attributes || !attributes.js || !attributes.js["NSFileModificationDate"])
+    return 0
+
+  return attributes.js["NSFileModificationDate"].js.getTime()
+}
+
+function deleteFile(path) {
+  return $.NSFileManager.defaultManager.removeItemAtPathError(path, undefined)
+}
+
+function writeFile(path, text) {
+  $(text).writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, undefined)
+}
+
+function parseSession(data) {
+  if (Array.isArray(data)) return { title: null, messages: data }
+  if (data && Array.isArray(data.messages)) return { title: data.title || null, messages: data.messages }
+  return { title: null, messages: [] }
+}
+
+function readSession(path) {
+  const chatString = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined).js
+  return parseSession(JSON.parse(chatString))
+}
+
+function writeSession(path, session) {
+  if (!session.title) {
+    writeFile(path, JSON.stringify(session.messages))
+    return
+  }
+
+  writeFile(path, JSON.stringify({
+    title: session.title,
+    messages: session.messages
+  }))
+}
+
+function appendChat(path, message) {
+  const session = readSession(path)
+  session.messages = session.messages.concat(message)
+  writeSession(path, session)
+}
+
+function markdownChat(messages, ignoreLastInterrupted = true) {
+  return messages.reduce((accumulator, current, index, allMessages) => {
+    if (current["role"] === "assistant")
+      return `${accumulator}${current["content"]}\n\n`
+
+    if (current["role"] === "user") {
+      const userMessage = `# ⊙ You\n\n${current["content"]}\n\n# ⊚ Assistant`
+      const userTwice = allMessages[index + 1]?.["role"] === "user"
+      const lastMessage = index === allMessages.length - 1
+
+      return userTwice || (lastMessage && !ignoreLastInterrupted) ?
+        `${accumulator}${userMessage}\n\n[Answer Interrupted]\n\n` :
+        `${accumulator}${userMessage}\n\n`
+    }
+
+    return accumulator
+  }, "")
+}
+
+function markdownSession(session, ignoreLastInterrupted = true) {
+  const header = session.title ? `# ⌖ ${session.title}\n\n---\n\n` : ""
+  return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
+}
+
+function resolveProvider() {
+  const provider = envVar("chat_provider") || "minimax"
+
+  if (provider === "minimax") {
+    const customEndpoint = envVar("minimax_api_endpoint")
+    const region = envVar("minimax_region") || "china"
+    const defaultEndpoint = region === "china" ?
+      "https://api.minimaxi.com/v1/chat/completions" :
+      "https://api.minimax.io/v1/chat/completions"
+
+    return {
+      providerName: "MiniMax",
+      apiKey: envVar("minimax_api_key"),
+      endpoint: customEndpoint || defaultEndpoint,
+      model: envVar("minimax_model") || "MiniMax-M2.7-highspeed"
+    }
+  }
+
+  const customEndpoint = envVar("deepseek_api_endpoint")
+  const defaultEndpoint = "https://api.deepseek.com/chat/completions"
+
+  return {
+    providerName: "DeepSeek",
+    apiKey: envVar("deepseek_api_key"),
+    endpoint: customEndpoint || defaultEndpoint,
+    model: envVar("deepseek_model") || "deepseek-v4-flash"
+  }
+}
+
+function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds) {
+  $.NSFileManager.defaultManager.createFileAtPathContentsAttributes(streamFile, undefined, undefined)
+
+  const messages = systemPrompt ?
+    [{ role: "system", content: systemPrompt }].concat(contextChat) :
+    contextChat
+
+  const task = $.NSTask.alloc.init
+  const stdout = $.NSPipe.pipe
+
+  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
+  task.arguments = [
+    apiEndpoint,
+    "--speed-limit", "0", "--speed-time", timeoutSeconds.toString(),
+    "--silent", "--no-buffer",
+    "--header", "Content-Type: application/json",
+    "--header", `Authorization: Bearer ${apiKey}`,
+    "--data", JSON.stringify({
+      model: model,
+      messages: messages,
+      stream: true,
+      thinking: { type: "disabled" }
+    }),
+    "--output", streamFile
+  ]
+
+  task.standardOutput = stdout
+  task.launchAndReturnError(false)
+  writeFile(pidStreamFile, task.processIdentifier.toString())
+}
+
+function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
+  const streamMarker = envVar("stream_marker") === "1"
+  const streamContents = $.NSString.stringWithContentsOfFileEncodingError(streamFile, $.NSUTF8StringEncoding, undefined)
+  const streamString = (streamContents && streamContents.js) || ""
+
+  if (streamMarker) return JSON.stringify({
+    rerun: 0.1,
+    variables: { streaming_now: true },
+    response: "…",
+    behaviour: { response: "append" }
+  })
+
+  if (streamString.startsWith("{")) {
+    try {
+      const parsedError = JSON.parse(streamString)
+      const errorMessage = parsedError["error"]?.["message"] || parsedError["message"]
+
+      if (errorMessage) {
+        deleteFile(streamFile)
+        deleteFile(pidStreamFile)
+
+        return JSON.stringify({
+          response: errorMessage,
+          behaviour: { response: "replacelast" }
+        })
+      }
+
+      throw "Could not determine error message"
+    } catch {
+      console.log(streamString)
+
+      return JSON.stringify({
+        response: streamString,
+        behaviour: { response: "replacelast" }
+      })
+    }
+  }
+
+  const chunks = streamString
+    .split("\n")
+    .filter(item => item)
+    .map(item => item.replace(/^data: /, ""))
+    .flatMap(item => { try { return JSON.parse(item) } catch { return [] } })
+
+  const responseText = chunks
+    .map(item => item["choices"]?.[0]?.["delta"]?.["content"])
+    .filter(item => item)
+    .join("")
+  const finishReason = chunks.slice(-1)[0]?.["choices"]?.[0]?.["finish_reason"]
+
+  if (!finishReason) {
+    const stalled = new Date().getTime() - fileModified(streamFile) > timeoutSeconds * 1000
+
+    if (stalled) {
+      if (responseText.length > 0) appendChat(chatFile, { role: "assistant", content: responseText })
+
+      deleteFile(streamFile)
+      deleteFile(pidStreamFile)
+
+      return JSON.stringify({
+        response: `${responseText} [Connection Stalled]`,
+        footer: "You can ask the assistant to continue the answer",
+        behaviour: { response: "replacelast", scroll: "end" }
+      })
+    }
+
+    if (streamString.length === 0) return JSON.stringify({
+      rerun: 0.1,
+      variables: { streaming_now: true }
+    })
+
+    return JSON.stringify({
+      rerun: 0.1,
+      variables: { streaming_now: true },
+      response: responseText,
+      behaviour: { response: "replacelast", scroll: "end" }
+    })
+  }
+
+  appendChat(chatFile, { role: "assistant", content: responseText })
+  deleteFile(streamFile)
+  deleteFile(pidStreamFile)
+
+  const footerText = (function() {
+    switch (finishReason) {
+      case "length": return "Maximum number of tokens reached"
+      case "content_filter": return "Content was omitted due to content filters"
+    }
+  })()
+
+  return JSON.stringify({
+    response: responseText,
+    footer: footerText,
+    behaviour: { response: "replacelast", scroll: "end" }
+  })
+}
+
+function handleRename(chatFile, typedQuery) {
+  const renameMatch = typedQuery.match(/^\/rename(?:\s+(.*))?$/i)
+  if (!renameMatch) return null
+
+  const session = readSession(chatFile)
+  const newTitle = (renameMatch[1] || "").trim()
+
+  if (!newTitle) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: "Usage: /rename Your session title",
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  session.title = newTitle
+  writeSession(chatFile, session)
+
+  return JSON.stringify({
+    response: markdownSession(session, false),
+    footer: `Session renamed to: ${newTitle}`,
+    behaviour: { scroll: "end" }
+  })
+}
+
+// Main
+function run(argv) {
+  const typedQuery = argv[0]
+  const maxContext = parseInt(envVar("max_context"))
+  const timeoutSeconds = parseInt(envVar("timeout_seconds"))
+  const { providerName, apiKey, endpoint, model } = resolveProvider()
+  const systemPrompt = envVar("system_prompt")
+  const chatFile = `${envVar("alfred_workflow_data")}/chat.json`
+  const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
+  const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
+  const streamingNow = envVar("streaming_now") === "1"
+
+  if (streamingNow) return readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds)
+
+  const session = readSession(chatFile)
+
+  if (fileExists(streamFile)) return JSON.stringify({
+    rerun: 0.1,
+    variables: { streaming_now: true, stream_marker: true },
+    response: markdownSession(session, true),
+    behaviour: { scroll: "end" }
+  })
+
+  if (typedQuery.length === 0) return JSON.stringify({
+    response: markdownSession(session, false),
+    behaviour: { scroll: "end" }
+  })
+
+  const renameResponse = handleRename(chatFile, typedQuery)
+  if (renameResponse) return renameResponse
+
+  if (!apiKey || apiKey.length === 0) {
+    return JSON.stringify({
+      response: `**${providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
+      behaviour: { response: "replacelast", scroll: "end" }
+    })
+  }
+
+  const appendQuery = { role: "user", content: typedQuery }
+  const ongoingMessages = session.messages.concat(appendQuery)
+  const contextChat = ongoingMessages.slice(-maxContext)
+
+  startStream(endpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds)
+  appendChat(chatFile, appendQuery)
+
+  return JSON.stringify({
+    rerun: 0.1,
+    variables: { streaming_now: true, stream_marker: true },
+    response: markdownSession({ title: session.title, messages: ongoingMessages })
+  })
+}
