@@ -16,7 +16,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
    - `MiniMax` → 走 MiniMax API
    - `DeepSeek` → 走 DeepSeek API
 2. **换具体模型**：改对应下拉框
-   - MiniMax：**MiniMax Model**（如 `MiniMax-M2.7-highspeed`、`MiniMax-M3`）
+   - MiniMax：**MiniMax Model**（默认 `MiniMax-M3`）
    - DeepSeek：**DeepSeek Model**（如 `deepseek-v4-flash`、`deepseek-v4-pro`）
 3. **MiniMax 国内/国际**：改 **MiniMax Region**（国内 Key 通常选 `China`）
 
@@ -32,7 +32,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | **DeepSeek Model** | 默认 `deepseek-v4-flash` |
 | **MiniMax API Key** | [platform.minimax.io](https://platform.minimax.io/user-center/basic-information/interface-key) |
 | **MiniMax Region** | 默认国内 `api.minimaxi.com`；国际 Key 改选 International |
-| **MiniMax Model** | 默认 `MiniMax-M2.7-highspeed` |
+| **MiniMax Model** | 默认 `MiniMax-M3` |
 | **Keep History** | 新对话时归档当前会话 |
 | **Context** | 发送给 API 的最近消息条数 |
 | **Timeout** | 流式连接超时（秒） |
@@ -91,8 +91,8 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | Provider | Endpoint | 默认模型 |
 |----------|----------|----------|
 | DeepSeek | `https://api.deepseek.com/chat/completions` | `deepseek-v4-flash` |
-| MiniMax 国际 | `https://api.minimax.io/v1/chat/completions` | `MiniMax-M2.7-highspeed` |
-| MiniMax 国内 | `https://api.minimaxi.com/v1/chat/completions` | 同上 |
+| MiniMax 国际 | `https://api.minimax.io/v1/chat/completions` | `MiniMax-M3` |
+| MiniMax 国内 | `https://api.minimaxi.com/v1/chat/completions` | `MiniMax-M3` |
 
 文档：[DeepSeek API](https://api-docs.deepseek.com/) · [MiniMax OpenAI API](https://platform.minimax.io/docs/api-reference/text-openai-api)
 

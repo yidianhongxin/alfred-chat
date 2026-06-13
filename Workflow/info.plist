@@ -2351,9 +2351,13 @@ Override API endpoints via Workflow Environment Variables:
 			<key>config</key>
 			<dict>
 				<key>default</key>
-				<string>MiniMax-M2.7-highspeed</string>
+				<string>MiniMax-M3</string>
 				<key>pairs</key>
 				<array>
+					<array>
+						<string>MiniMax M3</string>
+						<string>MiniMax-M3</string>
+					</array>
 					<array>
 						<string>MiniMax M2.7 Highspeed</string>
 						<string>MiniMax-M2.7-highspeed</string>
@@ -2361,10 +2365,6 @@ Override API endpoints via Workflow Environment Variables:
 					<array>
 						<string>MiniMax M2.7</string>
 						<string>MiniMax-M2.7</string>
-					</array>
-					<array>
-						<string>MiniMax M3</string>
-						<string>MiniMax-M3</string>
 					</array>
 					<array>
 						<string>MiniMax M2.5 Highspeed</string>
@@ -2484,7 +2484,7 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.2.1</string>
+	<string>1.2.2</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>

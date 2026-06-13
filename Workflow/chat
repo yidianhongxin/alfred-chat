@@ -97,7 +97,7 @@ function resolveProvider() {
       providerName: "MiniMax",
       apiKey: envVar("minimax_api_key"),
       endpoint: customEndpoint || defaultEndpoint,
-      model: envVar("minimax_model") || "MiniMax-M2.7-highspeed"
+      model: envVar("minimax_model") || "MiniMax-M3"
     }
   }
 

@@ -98,11 +98,11 @@ NEW_USER_CONFIG = [
     },
     {
         "config": {
-            "default": "MiniMax-M2.7-highspeed",
+            "default": "MiniMax-M3",
             "pairs": [
+                ["MiniMax M3", "MiniMax-M3"],
                 ["MiniMax M2.7 Highspeed", "MiniMax-M2.7-highspeed"],
                 ["MiniMax M2.7", "MiniMax-M2.7"],
-                ["MiniMax M3", "MiniMax-M3"],
                 ["MiniMax M2.5 Highspeed", "MiniMax-M2.5-highspeed"],
                 ["MiniMax M2.5", "MiniMax-M2.5"],
             ],
