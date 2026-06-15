@@ -1422,13 +1422,21 @@ function readSession(path) {
   return parseSession(JSON.parse(chatString))
 }
 
+function chatLabels() {
+  const user = (envVar("chat_user_label") || "You").trim() || "You"
+  const assistant = (envVar("chat_assistant_label") || "Assistant").trim() || "Assistant"
+  return { user, assistant }
+}
+
 function markdownChat(messages, ignoreLastInterrupted = true) {
+  const labels = chatLabels()
+
   return messages.reduce((accumulator, current, index, allMessages) =&gt; {
     if (current["role"] === "assistant")
       return `${accumulator}${current["content"]}\n\n`
 
     if (current["role"] === "user") {
-      const userMessage = `## You\n\n${current["content"]}\n\n## Assistant`
+      const userMessage = `# ⊙ ${labels.user}\n\n${current["content"]}\n\n# ⊚ ${labels.assistant}`
       const userTwice = allMessages[index + 1]?.["role"] === "user"
       const lastMessage = index === allMessages.length - 1
 
@@ -2458,6 +2466,48 @@ Override API endpoints via Workflow Environment Variables:
 			<key>config</key>
 			<dict>
 				<key>default</key>
+				<string>You</string>
+				<key>placeholder</key>
+				<string></string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Display name for your messages in the chat view.</string>
+			<key>label</key>
+			<string>Your Name</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>chat_user_label</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>Assistant</string>
+				<key>placeholder</key>
+				<string></string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Display name for AI replies in the chat view.</string>
+			<key>label</key>
+			<string>Assistant Name</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>chat_assistant_label</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
 				<string></string>
 				<key>required</key>
 				<false/>
@@ -2484,7 +2534,7 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.2.3</string>
+	<string>1.2.4</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>

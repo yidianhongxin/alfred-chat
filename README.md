@@ -36,6 +36,8 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | **Keep History** | 新对话时归档当前会话 |
 | **Context** | 发送给 API 的最近消息条数 |
 | **Timeout** | 流式连接超时（秒） |
+| **Your Name** | 对话里你的称呼，默认 `You` |
+| **Assistant Name** | 对话里 AI 的称呼，默认 `Assistant` |
 | **System Prompt** | 系统提示词 |
 
 ### 高级：Environment Variables
