@@ -75,6 +75,19 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 - 历史列表里也会用这个名称（优先于第一条问题）
 - 只输入 `/rename` 会提示用法
 
+### 回退对话片段（/rewind）
+
+类似 Claude Code 的 `/rewind`，在对话框输入（不会发给 AI）：
+
+| 命令 | 作用 |
+|------|------|
+| `/rewind` 或 `/rewind list` | 列出当前会话各轮编号 |
+| `/rewind 1` | 删除最近 1 轮（一问一答） |
+| `/rewind 3` | 删除最近 3 轮 |
+| `/rewind to 2` | 只保留前 2 轮，后面全部删掉 |
+
+适合答错方向时回退上下文，再继续问。
+
 ### 聊天历史
 
 输入 **`rename`** 直接浏览最近对话（可在 Configure 里改 **History Keyword**）。

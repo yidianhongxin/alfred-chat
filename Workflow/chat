@@ -240,6 +240,50 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
   })
 }
 
+function countTurns(messages) {
+  return messages.filter(message => message["role"] === "user").length
+}
+
+function popLastTurns(messages, count) {
+  let result = messages.slice()
+
+  for (let step = 0; step < count && result.length > 0; step++) {
+    if (result[result.length - 1]["role"] === "assistant") result.pop()
+    if (result.length > 0 && result[result.length - 1]["role"] === "user") result.pop()
+  }
+
+  return result
+}
+
+function trimToTurn(messages, turnNumber) {
+  if (turnNumber <= 0) return []
+
+  let turn = 0
+
+  for (let index = 0; index < messages.length; index++) {
+    if (messages[index]["role"] !== "user") continue
+
+    turn++
+    if (turn !== turnNumber) continue
+
+    const next = messages[index + 1]
+    return messages.slice(0, next?.["role"] === "assistant" ? index + 2 : index + 1)
+  }
+
+  return messages
+}
+
+function turnListText(messages) {
+  const users = messages.filter(message => message["role"] === "user")
+
+  if (users.length === 0) return "No turns yet."
+
+  return users.map((message, index) => {
+    const preview = message["content"].replace(/\s+/g, " ").slice(0, 48)
+    return `${index + 1}. ${preview}${message["content"].length > 48 ? "…" : ""}`
+  }).join("\n")
+}
+
 function handleRename(chatFile, typedQuery) {
   const renameMatch = typedQuery.match(/^\/rename(?:\s+(.*))?$/i)
   if (!renameMatch) return null
@@ -261,6 +305,72 @@ function handleRename(chatFile, typedQuery) {
   return JSON.stringify({
     response: markdownSession(session, false),
     footer: `Session renamed to: ${newTitle}`,
+    behaviour: { scroll: "end" }
+  })
+}
+
+function handleRewind(chatFile, typedQuery) {
+  const rewindMatch = typedQuery.match(/^\/rewind(?:\s+(.*))?$/i)
+  if (!rewindMatch) return null
+
+  const session = readSession(chatFile)
+  const argument = (rewindMatch[1] || "").trim()
+  const totalTurns = countTurns(session.messages)
+
+  if (!argument || argument.toLowerCase() === "list") {
+    return JSON.stringify({
+      response: `${markdownSession(session, false)}\n\n## Turns\n\n${turnListText(session.messages)}`,
+      footer: "Usage: /rewind 1 · /rewind 3 · /rewind to 2",
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  const toMatch = argument.match(/^to\s+(\d+)$/i)
+  if (toMatch) {
+    const targetTurn = parseInt(toMatch[1], 10)
+
+    if (targetTurn < 1 || targetTurn > totalTurns) {
+      return JSON.stringify({
+        response: markdownSession(session, false),
+        footer: `Turn must be between 1 and ${totalTurns}`,
+        behaviour: { scroll: "end" }
+      })
+    }
+
+    session.messages = trimToTurn(session.messages, targetTurn)
+    writeSession(chatFile, session)
+
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: `Rewound to turn ${targetTurn} of ${totalTurns}`,
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  const removeCount = parseInt(argument, 10)
+
+  if (!removeCount || removeCount < 1) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: "Usage: /rewind 1 · /rewind 3 · /rewind to 2",
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  if (removeCount > totalTurns) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: `Only ${totalTurns} turn(s) available`,
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  session.messages = popLastTurns(session.messages, removeCount)
+  writeSession(chatFile, session)
+
+  return JSON.stringify({
+    response: markdownSession(session, false),
+    footer: `Removed last ${removeCount} turn(s)`,
     behaviour: { scroll: "end" }
   })
 }
@@ -295,6 +405,9 @@ function run(argv) {
 
   const renameResponse = handleRename(chatFile, typedQuery)
   if (renameResponse) return renameResponse
+
+  const rewindResponse = handleRewind(chatFile, typedQuery)
+  if (rewindResponse) return rewindResponse
 
   if (!apiKey || apiKey.length === 0) {
     return JSON.stringify({

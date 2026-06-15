@@ -1208,7 +1208,7 @@ function run() {
 				<key>fontsizing</key>
 				<integer>0</integer>
 				<key>footertext</key>
-				<string>↩ Ask · ⌘↩ New chat · /rename Title · ⌥↩ Copy last · ⌃↩ Copy all · ⇧↩ Interrupt</string>
+				<string>↩ Ask · ⌘↩ New chat · /rename · /rewind · ⌥↩ Copy last · ⌃↩ Copy all · ⇧↩ Interrupt</string>
 				<key>inputfile</key>
 				<string>chat</string>
 				<key>inputtype</key>
@@ -2484,7 +2484,7 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.2.2</string>
+	<string>1.2.3</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>
