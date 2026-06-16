@@ -30,6 +30,13 @@ function writeFile(path, text) {
   $(text).writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, undefined)
 }
 
+function ensureDirectory(path) {
+  const fileManager = $.NSFileManager.defaultManager
+
+  if (!fileManager.fileExistsAtPath(path))
+    fileManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(path, true, undefined, undefined)
+}
+
 function parseSession(data) {
   if (Array.isArray(data)) return { title: null, messages: data }
   if (data && Array.isArray(data.messages)) return { title: data.title || null, messages: data.messages }
@@ -65,15 +72,32 @@ function chatLabels() {
   return { user, assistant }
 }
 
+function demoteMarkdownHeadings(text, bump = 3) {
+  if (!text) return text
+
+  return text.replace(/^(#{1,6})(\s)/gm, (_, hashes, space) => {
+    const level = Math.min(hashes.length + bump, 6)
+    return "#".repeat(level) + space
+  })
+}
+
+function formatUserLabel(labels) {
+  return `# ⊙ ${labels.user}`
+}
+
+function formatAssistantLabel(labels) {
+  return `# ⊚ ${labels.assistant}`
+}
+
 function markdownChat(messages, ignoreLastInterrupted = true) {
   const labels = chatLabels()
 
   return messages.reduce((accumulator, current, index, allMessages) => {
     if (current["role"] === "assistant")
-      return `${accumulator}${current["content"]}\n\n`
+      return `${accumulator}${demoteMarkdownHeadings(current["content"])}\n\n`
 
     if (current["role"] === "user") {
-      const userMessage = `# ⊙ ${labels.user}\n\n${current["content"]}\n\n# ⊚ ${labels.assistant}`
+      const userMessage = `${formatUserLabel(labels)}\n\n${current["content"]}\n\n${formatAssistantLabel(labels)}`
       const userTwice = allMessages[index + 1]?.["role"] === "user"
       const lastMessage = index === allMessages.length - 1
 
@@ -87,8 +111,67 @@ function markdownChat(messages, ignoreLastInterrupted = true) {
 }
 
 function markdownSession(session, ignoreLastInterrupted = true) {
-  const header = session.title ? `# ⌖ ${session.title}\n\n---\n\n` : ""
+  const header = session.title ? `## ⌖ ${session.title}\n\n---\n\n` : ""
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
+}
+
+function yamlScalar(value) {
+  if (!value) return '""'
+  if (/[:#\n"'[\]{}>|*&!%@`]/.test(value) || value.startsWith(" ") || value.endsWith(" "))
+    return JSON.stringify(value)
+
+  return value
+}
+
+function sanitizeFilename(name) {
+  const cleaned = name
+    .replace(/[\/\\:*?"<>|]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+
+  return cleaned || "alfred-chat"
+}
+
+function uniqueExportPath(exportDir, baseName) {
+  const stem = sanitizeFilename(baseName)
+  let filePath = `${exportDir}/${stem}.md`
+
+  if (!fileExists(filePath)) return filePath
+
+  for (let index = 2; index < 100; index++) {
+    filePath = `${exportDir}/${stem}-${index}.md`
+    if (!fileExists(filePath)) return filePath
+  }
+
+  return `${exportDir}/${stem}.md`
+}
+
+function exportMarkdownSession(session) {
+  const labels = chatLabels()
+  const title = session.title ||
+    session.messages.find(message => message["role"] === "user")?.["content"]?.split("\n")[0] ||
+    "Alfred Chat"
+  let body = `# ${title}\n\n`
+
+  session.messages.forEach(message => {
+    if (message["role"] === "user")
+      body += `## ${labels.user}\n\n${message["content"]}\n\n`
+    else if (message["role"] === "assistant")
+      body += `## ${labels.assistant}\n\n${message["content"]}\n\n`
+  })
+
+  return { title, body }
+}
+
+function obsidianExportPaths() {
+  const vaultPath = (envVar("obsidian_vault_path") || "/Users/DRLer/Obsidian_250614").replace(/\/$/, "")
+  const exportFolder = (envVar("obsidian_export_folder") || "0.inbox").replace(/^\/|\/$/g, "")
+
+  return {
+    vaultPath,
+    exportDir: `${vaultPath}/${exportFolder}`
+  }
 }
 
 function resolveProvider() {
@@ -211,7 +294,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
       deleteFile(pidStreamFile)
 
       return JSON.stringify({
-        response: `${responseText} [Connection Stalled]`,
+        response: `${demoteMarkdownHeadings(responseText)} [Connection Stalled]`,
         footer: "You can ask the assistant to continue the answer",
         behaviour: { response: "replacelast", scroll: "end" }
       })
@@ -225,7 +308,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
     return JSON.stringify({
       rerun: 0.1,
       variables: { streaming_now: true },
-      response: responseText,
+      response: demoteMarkdownHeadings(responseText),
       behaviour: { response: "replacelast", scroll: "end" }
     })
   }
@@ -242,7 +325,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
   })()
 
   return JSON.stringify({
-    response: responseText,
+    response: demoteMarkdownHeadings(responseText),
     footer: footerText,
     behaviour: { response: "replacelast", scroll: "end" }
   })
@@ -383,6 +466,91 @@ function handleRewind(chatFile, typedQuery) {
   })
 }
 
+function parseExportIntent(query) {
+  const trimmed = query.trim()
+  if (!trimmed) return null
+
+  const commandMatch = trimmed.match(/^\/export(?:\s+(.*))?$/i)
+  if (commandMatch) return { customName: (commandMatch[1] || "").trim() }
+
+  const isExportIntent =
+    /导出(?:当前|本次|本|这段)?(?:对话|聊天|会话)/.test(trimmed) ||
+    /导出到\s*(?:ob|obsidian)\b/i.test(trimmed) ||
+    /^export(?:\s+to\s+obsidian|\s+(?:this|current)?\s*(?:chat|conversation)\b)/i.test(trimmed)
+
+  if (!isExportIntent) return null
+
+  const namePatterns = [
+    /(?:命名为|取名(?:为)?|标题(?:为)?|叫做|称作)[:：]\s*(.+)$/i,
+    /(?:named|name(?:d)?|title)[:：\s]\s*(.+)$/i,
+    /[，,]\s*(?:命名为|取名(?:为)?|标题(?:为)?)[:：]?\s*(.+)$/i,
+  ]
+
+  for (const pattern of namePatterns) {
+    const match = trimmed.match(pattern)
+    if (match) return { customName: match[1].trim() }
+  }
+
+  return { customName: "" }
+}
+
+function exportSessionToObsidian(chatFile, customName) {
+  const session = readSession(chatFile)
+
+  if (session.messages.length === 0) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: "Nothing to export in this session",
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  const { vaultPath, exportDir } = obsidianExportPaths()
+
+  if (!fileExists(vaultPath)) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: `Obsidian vault not found: ${vaultPath}`,
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  ensureDirectory(exportDir)
+
+  const { title, body } = exportMarkdownSession(session)
+  const exportTitle = customName || title
+  const filePath = uniqueExportPath(exportDir, exportTitle)
+  const { providerName, model } = resolveProvider()
+  const created = new Date().toISOString()
+  const note = [
+    "---",
+    `title: ${yamlScalar(exportTitle)}`,
+    `created: ${created}`,
+    "tags:",
+    "  - alfred-chat",
+    `provider: ${yamlScalar(providerName)}`,
+    `model: ${yamlScalar(model)}`,
+    "---",
+    "",
+    body
+  ].join("\n")
+
+  writeFile(filePath, note)
+
+  return JSON.stringify({
+    response: `${markdownSession(session, false)}\n\n**已存入 done**`,
+    footer: "已存入 done",
+    behaviour: { scroll: "end" }
+  })
+}
+
+function handleExport(chatFile, typedQuery) {
+  const intent = parseExportIntent(typedQuery)
+  if (!intent) return null
+
+  return exportSessionToObsidian(chatFile, intent.customName)
+}
+
 // Main
 function run(argv) {
   const typedQuery = argv[0]
@@ -416,6 +584,9 @@ function run(argv) {
 
   const rewindResponse = handleRewind(chatFile, typedQuery)
   if (rewindResponse) return rewindResponse
+
+  const exportResponse = handleExport(chatFile, typedQuery)
+  if (exportResponse) return exportResponse
 
   if (!apiKey || apiKey.length === 0) {
     return JSON.stringify({

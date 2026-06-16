@@ -1208,7 +1208,7 @@ function run() {
 				<key>fontsizing</key>
 				<integer>0</integer>
 				<key>footertext</key>
-				<string>↩ Ask · ⌘↩ New chat · /rename · /rewind · ⌥↩ Copy last · ⌃↩ Copy all · ⇧↩ Interrupt</string>
+				<string>↩ Ask · ⌘↩ New chat · /rename · /rewind · /export · ⌥↩ Copy last · ⌃↩ Copy all · ⇧↩ Interrupt</string>
 				<key>inputfile</key>
 				<string>chat</string>
 				<key>inputtype</key>
@@ -1428,15 +1428,32 @@ function chatLabels() {
   return { user, assistant }
 }
 
+function demoteMarkdownHeadings(text, bump = 3) {
+  if (!text) return text
+
+  return text.replace(/^(#{1,6})(\s)/gm, (_, hashes, space) =&gt; {
+    const level = Math.min(hashes.length + bump, 6)
+    return "#".repeat(level) + space
+  })
+}
+
+function formatUserLabel(labels) {
+  return `# ⊙ ${labels.user}`
+}
+
+function formatAssistantLabel(labels) {
+  return `# ⊚ ${labels.assistant}`
+}
+
 function markdownChat(messages, ignoreLastInterrupted = true) {
   const labels = chatLabels()
 
   return messages.reduce((accumulator, current, index, allMessages) =&gt; {
     if (current["role"] === "assistant")
-      return `${accumulator}${current["content"]}\n\n`
+      return `${accumulator}${demoteMarkdownHeadings(current["content"])}\n\n`
 
     if (current["role"] === "user") {
-      const userMessage = `# ⊙ ${labels.user}\n\n${current["content"]}\n\n# ⊚ ${labels.assistant}`
+      const userMessage = `${formatUserLabel(labels)}\n\n${current["content"]}\n\n${formatAssistantLabel(labels)}`
       const userTwice = allMessages[index + 1]?.["role"] === "user"
       const lastMessage = index === allMessages.length - 1
 
@@ -1450,7 +1467,7 @@ function markdownChat(messages, ignoreLastInterrupted = true) {
 }
 
 function markdownSession(session, ignoreLastInterrupted = true) {
-  const header = session.title ? `# ${session.title}\n\n---\n\n` : ""
+  const header = session.title ? `## ⌖ ${session.title}\n\n---\n\n` : ""
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
 }
 
@@ -2466,6 +2483,48 @@ Override API endpoints via Workflow Environment Variables:
 			<key>config</key>
 			<dict>
 				<key>default</key>
+				<string>/Users/DRLer/Obsidian_250614</string>
+				<key>placeholder</key>
+				<string>/Users/you/ObsidianVault</string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Root folder of your Obsidian vault for /export.</string>
+			<key>label</key>
+			<string>Obsidian Vault Path</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>obsidian_vault_path</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>0.inbox</string>
+				<key>placeholder</key>
+				<string>0.inbox</string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Folder inside the vault where exported chats are saved.</string>
+			<key>label</key>
+			<string>Obsidian Export Folder</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>obsidian_export_folder</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
 				<string>You</string>
 				<key>placeholder</key>
 				<string></string>
@@ -2534,7 +2593,7 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.2.4</string>
+	<string>1.2.8</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>

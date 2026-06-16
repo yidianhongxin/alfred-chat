@@ -56,15 +56,32 @@ function chatLabels() {
   return { user, assistant }
 }
 
+function demoteMarkdownHeadings(text, bump = 3) {
+  if (!text) return text
+
+  return text.replace(/^(#{1,6})(\\s)/gm, (_, hashes, space) => {
+    const level = Math.min(hashes.length + bump, 6)
+    return "#".repeat(level) + space
+  })
+}
+
+function formatUserLabel(labels) {
+  return `# ⊙ ${labels.user}`
+}
+
+function formatAssistantLabel(labels) {
+  return `# ⊚ ${labels.assistant}`
+}
+
 function markdownChat(messages, ignoreLastInterrupted = true) {
   const labels = chatLabels()
 
   return messages.reduce((accumulator, current, index, allMessages) => {
     if (current["role"] === "assistant")
-      return `${accumulator}${current["content"]}\\n\\n`
+      return `${accumulator}${demoteMarkdownHeadings(current["content"])}\\n\\n`
 
     if (current["role"] === "user") {
-      const userMessage = `# ⊙ ${labels.user}\\n\\n${current["content"]}\\n\\n# ⊚ ${labels.assistant}`
+      const userMessage = `${formatUserLabel(labels)}\\n\\n${current["content"]}\\n\\n${formatAssistantLabel(labels)}`
       const userTwice = allMessages[index + 1]?.["role"] === "user"
       const lastMessage = index === allMessages.length - 1
 
@@ -78,7 +95,7 @@ function markdownChat(messages, ignoreLastInterrupted = true) {
 }
 
 function markdownSession(session, ignoreLastInterrupted = true) {
-  const header = session.title ? `# ${session.title}\\n\\n---\\n\\n` : ""
+  const header = session.title ? `## ⌖ ${session.title}\\n\\n---\\n\\n` : ""
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
 }
 

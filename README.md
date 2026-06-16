@@ -38,7 +38,15 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | **Timeout** | 流式连接超时（秒） |
 | **Your Name** | 对话里你的称呼，默认 `You` |
 | **Assistant Name** | 对话里 AI 的称呼，默认 `Assistant` |
+| **Obsidian Vault Path** | OB 库根目录，供 `/export` 使用 |
+| **Obsidian Export Folder** | 导出子文件夹，默认 `0.inbox` |
 | **System Prompt** | 系统提示词 |
+
+### 对话排版说明
+
+- **你和 AI 的称呼**使用一级标题（`#`），最醒目。
+- **AI 回复里的标题**（如 `#`、`##`）会自动降 3 级显示，避免和称呼抢字号。
+- **字体颜色**：Alfred Text View 只支持标准 Markdown，**不支持**自定义颜色（HTML 标签会原样显示）。可在 Text View 右上角 `···` 调整全局字号。
 
 ### 高级：Environment Variables
 
@@ -89,6 +97,30 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | `/rewind to 2` | 只保留前 2 轮，后面全部删掉 |
 
 适合答错方向时回退上下文，再继续问。
+
+### 导出到 Obsidian（/export）
+
+在对话框输入（不会发给 AI）：
+
+| 命令 | 作用 |
+|------|------|
+| `/export` | 导出当前整段对话到 OB 库 |
+| `/export 笔记标题` | 指定笔记标题（文件名）后导出 |
+
+也支持自然语言（不会发给 AI），例如：
+
+- `导出当前对话`
+- `导出当前对话，命名为：哮喘与运动`
+- `导出对话到 obsidian，标题：项目讨论`
+- `export this conversation, named: Weekly review`
+
+**注意**：需包含「导出 + 对话/聊天/会话」或 `/export`，避免和普通聊天里的「导出」一词混淆。
+
+- 默认保存到 **Obsidian Vault Path** / **Obsidian Export Folder**（默认 `0.inbox/`）
+- 文件名即笔记标题，如 `螨虫导致的哮喘用药.md`（同名时自动加 `-2`、`-3`）
+- 导出成功后对话框回复 **已存入 done**
+
+首次使用请在 Configure 里确认 **Obsidian Vault Path** 指向你的库根目录。
 
 ### 聊天历史
 
