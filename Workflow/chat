@@ -30,6 +30,11 @@ function writeFile(path, text) {
   $(text).writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, undefined)
 }
 
+function readFile(path) {
+  const content = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined)
+  return (content && content.js) || ""
+}
+
 function ensureDirectory(path) {
   const fileManager = $.NSFileManager.defaultManager
 
@@ -46,6 +51,17 @@ function parseSession(data) {
 function readSession(path) {
   const chatString = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined).js
   return parseSession(JSON.parse(chatString))
+}
+
+function readJson(path, fallback) {
+  if (!fileExists(path)) return fallback
+
+  try {
+    const jsonString = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined).js
+    return JSON.parse(jsonString)
+  } catch {
+    return fallback
+  }
 }
 
 function writeSession(path, session) {
@@ -115,6 +131,40 @@ function markdownSession(session, ignoreLastInterrupted = true) {
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
 }
 
+function memoryPrompt(memoryPath) {
+  const memory = readJson(memoryPath, {})
+  const lines = []
+  const maxMemoryChars = 6000
+
+  Object.keys(memory).sort().forEach(key => {
+    if (key === "_notes") return
+    lines.push(`- ${key}: ${memory[key]}`)
+  })
+
+  if (Array.isArray(memory["_notes"])) {
+    memory["_notes"].forEach(item => {
+      if (item && item.content) lines.push(`- ${item.content}`)
+    })
+  }
+
+  if (lines.length === 0) return ""
+
+  let body = lines.join("\n")
+  if (body.length > maxMemoryChars)
+    body = `${body.slice(0, maxMemoryChars)}\n- [长期记忆过长，已截断]`
+
+  return [
+    "以下是用户要求长期记住的背景信息和使用偏好。回答时请主动遵守，不要声称自己无法跨对话记住；这些内容来自本地 memory.json：",
+    "",
+    body
+  ].join("\n")
+}
+
+function composeSystemPrompt(systemPrompt, memoryPath) {
+  const memory = memoryPrompt(memoryPath)
+  return [systemPrompt, memory].filter(item => item && item.trim().length > 0).join("\n\n")
+}
+
 function yamlScalar(value) {
   if (!value) return '""'
   if (/[:#\n"'[\]{}>|*&!%@`]/.test(value) || value.startsWith(" ") || value.endsWith(" "))
@@ -174,6 +224,296 @@ function obsidianExportPaths() {
   }
 }
 
+function responseWithConversation(chatFile, userText, assistantText, footer) {
+  const session = readSession(chatFile)
+  session.messages = session.messages.concat([
+    { role: "user", content: userText },
+    { role: "assistant", content: assistantText }
+  ])
+  writeSession(chatFile, session)
+
+  return JSON.stringify({
+    response: markdownSession(session, false),
+    footer: footer,
+    behaviour: { scroll: "end" }
+  })
+}
+
+function localAgentScriptPath() {
+  const cwd = $.NSFileManager.defaultManager.currentDirectoryPath.js
+  const directPath = `${cwd}/local_agent.py`
+  const workflowPath = `${cwd}/Workflow/local_agent.py`
+
+  if (fileExists(directPath)) return directPath
+  if (fileExists(workflowPath)) return workflowPath
+  return "local_agent.py"
+}
+
+function runLocalAgentWithArguments(args) {
+  const task = $.NSTask.alloc.init
+  const stdout = $.NSPipe.pipe
+  const stderr = $.NSPipe.pipe
+
+  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+  task.arguments = [localAgentScriptPath()].concat(args)
+  task.standardOutput = stdout
+  task.standardError = stderr
+  task.launchAndReturnError(false)
+
+  let waitedMs = 0
+  while (task.running && waitedMs < 5000) {
+    delay(0.05)
+    waitedMs += 50
+  }
+
+  if (task.running) {
+    task.terminate()
+    return {
+      handled: true,
+      assistant_text: "本地 Agent 执行超时",
+      footer: "本地 Agent 执行超时"
+    }
+  }
+
+  const output = $.NSString.alloc.initWithDataEncoding(
+    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+  const errorOutput = $.NSString.alloc.initWithDataEncoding(
+    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+
+  if (task.terminationStatus !== 0) return {
+    handled: true,
+    assistant_text: `本地 Agent 执行失败：${errorOutput || output}`,
+    footer: "本地 Agent 执行失败"
+  }
+
+  try {
+    return JSON.parse(output)
+  } catch {
+    return {
+      handled: true,
+      assistant_text: `本地 Agent 返回异常：${output}`,
+      footer: "本地 Agent 返回异常"
+    }
+  }
+}
+
+function runLocalAgent(typedQuery) {
+  return runLocalAgentWithArguments([typedQuery])
+}
+
+function runLocalAgentTool(toolCall) {
+  return runLocalAgentWithArguments(["--tool", JSON.stringify(toolCall)])
+}
+
+function looksLikeLocalAgentQuery(text) {
+  const fileHint = "([/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
+
+  return /^确认执行$/i.test(text) ||
+    /^(取消|取消执行)$/i.test(text) ||
+    /^(撤销上一步|undo last)$/i.test(text) ||
+    /^@\//.test(text) ||
+    /^\/Users\/DRLer\//.test(text) ||
+    /桌面(?:上)?(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)/i.test(text) ||
+    /(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)(?:到)?桌面/i.test(text) ||
+    new RegExp(`(创建|新建|写入|追加|附加|替换|删除|移除|读取|查看).*${fileHint}`, "i").test(text) ||
+    new RegExp(`${fileHint}.*(内容|正文)[:：]`, "i").test(text) ||
+    /^(列出|新增|完成)任务/i.test(text) ||
+    /^记住/i.test(text) ||
+    /^(你)?记住/i.test(text) ||
+    /^列出记忆$/i.test(text) ||
+    /^搜索(?:OB|Obsidian|ob)/i.test(text) ||
+    /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(text) ||
+    /(读|读取|查看).*(OB|Obsidian|ob).*(今天|今日)日记/i.test(text) ||
+    /^(读|读取|查看)?(今天|今日)日记$/i.test(text) ||
+    /^运行命令[:：]/i.test(text) ||
+    /提醒/i.test(text)
+}
+
+function handleLocalFileControl(chatFile, typedQuery) {
+  if (!looksLikeLocalAgentQuery(typedQuery.trim())) return null
+
+  const result = runLocalAgent(typedQuery)
+  if (!result || !result.handled) return null
+
+  return responseWithConversation(
+    chatFile,
+    typedQuery.trim(),
+    result.assistant_text || "本地操作完成",
+    result.footer || result.assistant_text || "本地操作完成"
+  )
+}
+
+function runChatCompletion(apiEndpoint, apiKey, payload, timeoutSeconds) {
+  const task = $.NSTask.alloc.init
+  const stdout = $.NSPipe.pipe
+  const stderr = $.NSPipe.pipe
+
+  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
+  task.arguments = [
+    apiEndpoint,
+    "--max-time", timeoutSeconds.toString(),
+    "--silent",
+    "--header", "Content-Type: application/json",
+    "--header", `Authorization: Bearer ${apiKey}`,
+    "--data", JSON.stringify(payload)
+  ]
+  task.standardOutput = stdout
+  task.standardError = stderr
+  task.launchAndReturnError(false)
+
+  let waitedMs = 0
+  while (task.running && waitedMs < timeoutSeconds * 1000) {
+    delay(0.05)
+    waitedMs += 50
+  }
+
+  if (task.running) {
+    task.terminate()
+    return { error: "模型工具路由超时" }
+  }
+
+  const output = $.NSString.alloc.initWithDataEncoding(
+    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+  const errorOutput = $.NSString.alloc.initWithDataEncoding(
+    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+
+  if (task.terminationStatus !== 0) return { error: errorOutput || output }
+
+  try {
+    const parsed = JSON.parse(output)
+    const errorMessage = parsed["error"]?.["message"] || parsed["message"]
+    if (errorMessage) return { error: errorMessage }
+    return { content: parsed["choices"]?.[0]?.["message"]?.["content"] || "" }
+  } catch {
+    return { error: output }
+  }
+}
+
+function extractJsonObject(text) {
+  const trimmed = (text || "").trim()
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidate = fenced ? fenced[1].trim() : trimmed
+  const start = candidate.indexOf("{")
+  const end = candidate.lastIndexOf("}")
+  if (start < 0 || end < start) return null
+
+  try {
+    return JSON.parse(candidate.slice(start, end + 1))
+  } catch {
+    return null
+  }
+}
+
+function toolRouterPrompt() {
+  return [
+    "你是 Alfred Chat 的工具路由器。判断用户请求是否需要调用本地工具。",
+    "只返回 JSON，不要解释，不要 Markdown。",
+    "如果不需要工具，返回 {\"tool\":\"none\",\"args\":{}}。",
+    "只有当用户明确要求读写本地文件、Obsidian、任务、记忆、白名单命令或撤销时才调用工具。",
+    "普通知识问答、写作、解释、关于文件操作方法的问题都返回 none。",
+    "可用工具：",
+    "- read_file {path}",
+    "- write_file {path, content}",
+    "- append_file {path, content}",
+    "- replace_file {path, old_text, new_text}",
+    "- delete_file {path}",
+    "- list_dir {path, ext}",
+    "- move_ext {path, ext, dest}",
+    "- obsidian_search {term}",
+    "- obsidian_daily_read {}",
+    "- obsidian_daily_append {content}",
+    "- task_add {text}",
+    "- task_list {}",
+    "- task_done {id}",
+    "- reminder_add {title, due, list?} — 写入 macOS 提醒事项，due 用 ISO 本地时间如 2026-06-18T09:30:00",
+    "- memory_set {key, value}",
+    "- memory_append {note}",
+    "- memory_list {}",
+    "- shell {command}，只适合 ls/pwd/mkdir",
+    "- undo {}",
+    "路径规则：用户说桌面就是 Desktop；裸文件名如 123.txt 默认桌面。",
+    "示例：读下ob库今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
+    "示例：帮我总结今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
+    "示例：早上9点30提醒我打卡 -> {\"tool\":\"none\",\"args\":{}}（本地直接解析，不走模型）",
+    "示例：明天下午3点提醒开会 -> reminder_add 由本地解析"
+  ].join("\n")
+}
+
+function mayNeedModelToolUse(text) {
+  const fileHint = "(@?\\/Users\\/DRLer\\/|^@?~\\/|[/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
+  const actionWords = "(读|读取|查看|看看|打开|总结|分析|整理|搜索|查找|写入|写到|新建|创建|追加|附加|替换|删除|移除|列出|移动|撤销)"
+  const dailyActionWords = "(读|读取|查看|看看|总结|分析|整理|追加|写入|写到)"
+
+  return /(?:读|读取|查看|看看|搜索|查找|总结|分析|整理|追加|写入|写到).*(?:OB|Obsidian|ob)/i.test(text) ||
+    new RegExp(`${dailyActionWords}[^？?\\n]{0,40}(?:今日日记|今天日记|日记)`, "i").test(text) ||
+    /^(?:今日日记|今天日记)$/i.test(text) ||
+    /提醒/i.test(text) ||
+    /^(?:记住|你记住|新增任务[:：]|列出任务$|完成任务\s*\d+$|撤销上一步$|undo last$)/i.test(text) ||
+    /(?:桌面|Desktop).*(?:文件|txt|md|json|yaml|yml|csv|py|js|ts|plist|读|读取|查看|看看|写入|新建|创建|删除|列出|移动|总结|分析)/i.test(text) ||
+    new RegExp(`${actionWords}[^？?\\n]{0,80}${fileHint}`, "i").test(text) ||
+    new RegExp(`${fileHint}[^？?\\n]{0,80}${actionWords}`, "i").test(text)
+}
+
+function decideToolUse(apiEndpoint, apiKey, model, typedQuery, timeoutSeconds) {
+  const result = runChatCompletion(apiEndpoint, apiKey, {
+    model: model,
+    messages: [
+      { role: "system", content: toolRouterPrompt() },
+      { role: "user", content: typedQuery }
+    ],
+    stream: false,
+    temperature: 0
+  }, Math.min(timeoutSeconds, 10))
+
+  if (result.error) return null
+
+  const parsed = extractJsonObject(result.content)
+  if (!parsed || !parsed.tool || parsed.tool === "none") return null
+  if (!parsed.args) parsed.args = {}
+  return parsed
+}
+
+function shouldFinalizeToolResult(toolCall, typedQuery) {
+  const tool = toolCall?.tool || ""
+  return /总结|分析|解释|提取|根据|帮我|整理成|改写/i.test(typedQuery) &&
+    ["read_file", "obsidian_daily_read", "obsidian_search", "list_dir", "shell"].includes(tool)
+}
+
+function finalizeToolResult(apiEndpoint, apiKey, model, systemPrompt, typedQuery, toolResultText, timeoutSeconds) {
+  const result = runChatCompletion(apiEndpoint, apiKey, {
+    model: model,
+    messages: [
+      { role: "system", content: systemPrompt || "你是一个有帮助的 AI 助手。" },
+      { role: "user", content: `用户原始请求：${typedQuery}\n\n本地工具结果：\n${toolResultText}\n\n请基于工具结果回答用户。` }
+    ],
+    stream: false
+  }, Math.min(timeoutSeconds, 30))
+
+  return result.error ? `工具已执行，但模型总结失败：${result.error}\n\n${toolResultText}` : result.content
+}
+
+function handleModelToolUse(chatFile, typedQuery, apiEndpoint, apiKey, model, systemPrompt, timeoutSeconds) {
+  if (!mayNeedModelToolUse(typedQuery.trim())) return null
+
+  const toolCall = decideToolUse(apiEndpoint, apiKey, model, typedQuery, timeoutSeconds)
+  if (!toolCall) return null
+
+  const result = runLocalAgentTool(toolCall)
+  if (!result || !result.handled) return null
+
+  const toolText = result.assistant_text || "本地工具已执行"
+  const assistantText = shouldFinalizeToolResult(toolCall, typedQuery) && result.status === "success" ?
+    finalizeToolResult(apiEndpoint, apiKey, model, systemPrompt, typedQuery, toolText, timeoutSeconds) :
+    toolText
+
+  return responseWithConversation(
+    chatFile,
+    typedQuery.trim(),
+    assistantText,
+    result.footer || assistantText
+  )
+}
+
 function resolveProvider() {
   const provider = envVar("chat_provider") || "minimax"
 
@@ -188,7 +528,8 @@ function resolveProvider() {
       providerName: "MiniMax",
       apiKey: envVar("minimax_api_key"),
       endpoint: customEndpoint || defaultEndpoint,
-      model: envVar("minimax_model") || "MiniMax-M3"
+      model: envVar("minimax_model") || "MiniMax-M3",
+      supportsThinkingParam: true
     }
   }
 
@@ -199,11 +540,23 @@ function resolveProvider() {
     providerName: "DeepSeek",
     apiKey: envVar("deepseek_api_key"),
     endpoint: customEndpoint || defaultEndpoint,
-    model: envVar("deepseek_model") || "deepseek-v4-flash"
+    model: envVar("deepseek_model") || "deepseek-v4-flash",
+    supportsThinkingParam: true
   }
 }
 
-function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds) {
+function chatPayload(model, messages, stream, supportsThinkingParam) {
+  const payload = {
+    model: model,
+    messages: messages,
+    stream: stream
+  }
+
+  if (supportsThinkingParam) payload.thinking = { type: "disabled" }
+  return payload
+}
+
+function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, supportsThinkingParam = true) {
   $.NSFileManager.defaultManager.createFileAtPathContentsAttributes(streamFile, undefined, undefined)
 
   const messages = systemPrompt ?
@@ -220,12 +573,7 @@ function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, stre
     "--silent", "--no-buffer",
     "--header", "Content-Type: application/json",
     "--header", `Authorization: Bearer ${apiKey}`,
-    "--data", JSON.stringify({
-      model: model,
-      messages: messages,
-      stream: true,
-      thinking: { type: "disabled" }
-    }),
+    "--data", JSON.stringify(chatPayload(model, messages, true, supportsThinkingParam)),
     "--output", streamFile
   ]
 
@@ -556,9 +904,11 @@ function run(argv) {
   const typedQuery = argv[0]
   const maxContext = parseInt(envVar("max_context"))
   const timeoutSeconds = parseInt(envVar("timeout_seconds"))
-  const { providerName, apiKey, endpoint, model } = resolveProvider()
-  const systemPrompt = envVar("system_prompt")
+  const { providerName, apiKey, endpoint, model, supportsThinkingParam } = resolveProvider()
+  const configuredSystemPrompt = envVar("system_prompt")
   const chatFile = `${envVar("alfred_workflow_data")}/chat.json`
+  const memoryFile = `${envVar("alfred_workflow_data")}/memory.json`
+  const systemPrompt = composeSystemPrompt(configuredSystemPrompt, memoryFile)
   const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
   const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
   const streamingNow = envVar("streaming_now") === "1"
@@ -588,6 +938,9 @@ function run(argv) {
   const exportResponse = handleExport(chatFile, typedQuery)
   if (exportResponse) return exportResponse
 
+  const localControlResponse = handleLocalFileControl(chatFile, typedQuery)
+  if (localControlResponse) return localControlResponse
+
   if (!apiKey || apiKey.length === 0) {
     return JSON.stringify({
       response: `**${providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
@@ -595,11 +948,14 @@ function run(argv) {
     })
   }
 
+  const modelToolResponse = handleModelToolUse(chatFile, typedQuery, endpoint, apiKey, model, systemPrompt, timeoutSeconds)
+  if (modelToolResponse) return modelToolResponse
+
   const appendQuery = { role: "user", content: typedQuery }
   const ongoingMessages = session.messages.concat(appendQuery)
   const contextChat = ongoingMessages.slice(-maxContext)
 
-  startStream(endpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds)
+  startStream(endpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, supportsThinkingParam)
   appendChat(chatFile, appendQuery)
 
   return JSON.stringify({

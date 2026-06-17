@@ -602,6 +602,45 @@
 				<true/>
 			</dict>
 		</array>
+		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>2345B220-18B0-4F70-9DD7-B7A20763FFBC</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>84A47CA0-9D2D-4F06-A7AD-71C5DEF87663</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
 	</dict>
 	<key>createdby</key>
 	<string>DRLer</string>
@@ -1825,6 +1864,72 @@ function run(argv) {
 			<key>version</key>
 			<integer>2</integer>
 		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>hotkey</key>
+				<integer>20</integer>
+				<key>hotmod</key>
+				<integer>1048576</integer>
+				<key>leftcursor</key>
+				<false/>
+				<key>donotshowmodhint</key>
+				<false/>
+				<key>hotkeyLabel</key>
+				<string>Open recent chat</string>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.trigger.hotkey</string>
+			<key>uid</key>
+			<string>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>concurrently</key>
+				<false/>
+				<key>escaping</key>
+				<integer>102</integer>
+				<key>script</key>
+				<string></string>
+				<key>scriptargtype</key>
+				<integer>0</integer>
+				<key>scriptfile</key>
+				<string>recent_chat.js</string>
+				<key>type</key>
+				<integer>7</integer>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.action.script</string>
+			<key>uid</key>
+			<string>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</string>
+			<key>version</key>
+			<integer>2</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>argument</key>
+				<string></string>
+				<key>passthroughargument</key>
+				<false/>
+				<key>variables</key>
+				<dict>
+					<key>chat_history_save</key>
+					<string>1</string>
+					<key>replace_with_chat</key>
+					<string>{query}</string>
+				</dict>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.utility.argument</string>
+			<key>uid</key>
+			<string>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
 	</array>
 	<key>readme</key>
 	<string>## Setup
@@ -2198,6 +2303,29 @@ Override API endpoints via Workflow Environment Variables:
 			<real>1240.0</real>
 			<key>ypos</key>
 			<real>520.0</real>
+		</dict>
+		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
+		<dict>
+			<key>xpos</key>
+			<real>65.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
+			<key>colorindex</key>
+			<integer>4</integer>
+		</dict>
+		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
+		<dict>
+			<key>xpos</key>
+			<real>280.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
+		</dict>
+		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
+		<dict>
+			<key>xpos</key>
+			<real>495.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
 		</dict>
 	</dict>
 	<key>userconfigurationconfig</key>
@@ -2593,7 +2721,7 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.2.8</string>
+	<string>1.5.4</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>

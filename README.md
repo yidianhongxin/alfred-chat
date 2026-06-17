@@ -6,7 +6,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 
 1. 下载 [`Alfred Chat.alfredworkflow`](Alfred%20Chat.alfredworkflow) 并双击安装。
 2. 打开 Alfred Preferences → Workflows → **Alfred Chat** → **Configure**。
-3. 填入两个 API Key（默认使用 MiniMax）。
+3. 选择 **Provider**（MiniMax 或 DeepSeek），填入对应 API Key。
 
 ## 切换模型
 
@@ -27,7 +27,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | 选项 | 说明 |
 |------|------|
 | **Chat Keyword** | 触发关键词，默认 `chat` |
-| **Provider** | 默认 `MiniMax`；可改选 `DeepSeek` |
+| **Provider** | `MiniMax` / `DeepSeek` |
 | **DeepSeek API Key** | [platform.deepseek.com](https://platform.deepseek.com/api_keys) |
 | **DeepSeek Model** | 默认 `deepseek-v4-flash` |
 | **MiniMax API Key** | [platform.minimax.io](https://platform.minimax.io/user-center/basic-information/interface-key) |
@@ -60,6 +60,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 ### 触发方式
 
 - 关键词：`chat 你的问题`
+- 快捷键：**⌘3** — 打开最近一次对话（当前会话优先，否则加载最新归档）
 - Universal Action：**Ask AI**
 - Fallback Search：**Ask AI '{query}'**
 
@@ -122,6 +123,57 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 
 首次使用请在 Configure 里确认 **Obsidian Vault Path** 指向你的库根目录。
 
+### 本机文件控制（自然语言）
+
+支持在对话框直接用自然语言执行本机文件操作（不会发给 AI）。这部分由 `Workflow/local_agent.py` 处理，Alfred 负责展示对话，本地 Agent 负责解析、权限检查和真实文件操作：
+
+- `创建文件 /Users/DRLer/tmp/note.md 内容：今天完成了复盘`
+- `写入123.txt`
+- `桌面写入123.txt`
+- `在桌面新建123.txt`
+- `在桌面新建123.txt 内容：hello`
+- `追加 /Users/DRLer/tmp/note.md 内容：\n- 明天继续`
+- `替换 /Users/DRLer/tmp/note.md 中 复盘 为 周复盘`
+- `删除 /Users/DRLer/tmp/note.md`
+- `列出桌面所有txt文件`
+- `把桌面所有txt移动到 Desktop/txt归档`
+- `读取123.txt`
+- `搜索OB哮喘`
+- `读下ob库今日日记`
+- `今天日记 内容：今天完成 Alfred Chat 升级`
+- `新增任务：整理桌面`
+- `早上9点30提醒我打卡`（写入 macOS **提醒事项**）
+- `明天下午3点提醒开会`
+- `提醒我18:30取快递`
+- `列出任务`
+- `完成任务 1`
+- `记住 资料库 是 /Users/DRLer/Obsidian_250614/3.wiki资料`
+- `你记住以下内容：OB 指 Obsidian；CC 指 Claude Code`
+- `列出记忆`
+- `运行命令：ls Desktop`
+- `撤销上一步`
+
+规则：
+
+- 仅允许操作 `/Users/DRLer` 目录内文件
+- 普通写入/追加/替换：直接执行
+- 危险操作（删除文件、覆盖已存在文件）：会先提示，需输入 **确认执行**
+- 输入 `取消` 可取消待执行危险操作
+- 裸文件名默认指向桌面，例如 `写入123.txt` / `删除123.txt`
+- 批量移动会先展示计划，确认后执行
+- 每次写入/追加/替换/删除/批量移动会写操作日志，支持 `撤销上一步`
+- Shell 仅允许白名单命令：`ls`、`pwd`、`mkdir`
+- **提醒事项**：支持自然语言时间，写入系统「提醒事项」App（首次使用需授权）
+- `memory.json` 会自动注入后续 AI 请求，模型会带着长期记忆回答
+
+### 模型驱动 Tool Use
+
+普通请求会先由模型判断是否需要本地工具。模型只输出结构化 tool call，`Workflow/local_agent.py` 负责真实执行。例如：
+
+- `帮我总结今日日记` → 模型选择 `obsidian_daily_read` → 读取本地 OB 日记 → 再由模型总结
+- `帮我看看桌面123.txt写了什么` → 模型选择 `read_file`
+- `把这个偏好记住：OB 就是 Obsidian` → 模型选择 `memory_append`
+
 ### 聊天历史
 
 输入 **`rename`** 直接浏览最近对话（可在 Configure 里改 **History Keyword**）。
@@ -153,6 +205,7 @@ cd Workflow && zip -r "../Alfred Chat.alfredworkflow" .
 源码结构：
 
 - `Workflow/chat` — 主 JXA 脚本（流式 API 调用）
+- `Workflow/local_agent.py` — 本地文件 Agent（工具解析、权限、执行）
 - `Workflow/info.plist` — Workflow 对象与配置
 - `scripts/transform_plist.py` — 从 openai-workflow 迁移用的 plist 转换脚本
 
