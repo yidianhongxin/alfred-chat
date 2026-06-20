@@ -6,7 +6,7 @@
 	<string>com.drlerr.alfred-chat</string>
 	<key>config</key>
 	<dict>
-		<key>conifgs</key>
+		<key>configs</key>
 		<array>
 			<dict>
 				<key>id</key>
@@ -689,6 +689,11 @@
 	<false/>
 	<key>name</key>
 	<string>Alfred Chat</string>
+	<key>variables</key>
+	<dict>
+		<key>tavily_api_key</key>
+		<string></string>
+	</dict>
 	<key>objects</key>
 	<array>
 		<dict>
@@ -3110,6 +3115,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7 (web_search Tavily + web_fetch baoyu-fetch + config.json 自填)</string>
+	<string>W7.2 (Tavily 走 Configure Workflow UI,字段名 configs 已修正)</string>
 </dict>
 </plist>
