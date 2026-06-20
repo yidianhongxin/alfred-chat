@@ -114,7 +114,7 @@
 		<array>
 			<dict>
 				<key>destinationuid</key>
-				<string>E65D3BEB-6B77-4799-B6BA-A8DBDEFB7167</string>
+				<string>74890339-2177-4514-B0CD-9D06DF626D21</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -204,6 +204,16 @@
 				<key>vitoclose</key>
 				<true/>
 			</dict>
+			<dict>
+				<key>destinationuid</key>
+				<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
+				<key>modifiers</key>
+				<integer>1048576</integer>
+				<key>modifiersubtext</key>
+				<string>Start new chat</string>
+				<key>vitoclose</key>
+				<true/>
+			</dict>
 		</array>
 		<key>74890339-2177-4514-B0CD-9D06DF626D21</key>
 		<array>
@@ -285,7 +295,7 @@
 		<array>
 			<dict>
 				<key>destinationuid</key>
-				<string>002874FF-3AE4-4E8F-A4F8-65844E5D6CFB</string>
+				<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -409,7 +419,7 @@
 			</dict>
 			<dict>
 				<key>destinationuid</key>
-				<string>07D6395E-9C36-4E80-899A-736B6654F06A</string>
+				<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
 				<key>modifiers</key>
 				<integer>1048576</integer>
 				<key>modifiersubtext</key>
@@ -426,6 +436,19 @@
 				<string>Browse chat histories</string>
 				<key>vitoclose</key>
 				<true/>
+			</dict>
+		</array>
+		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
 			</dict>
 		</array>
 		<key>C6E0966E-A4F8-4DC1-8373-F247FA06A251</key>
@@ -464,6 +487,19 @@
 				<true/>
 			</dict>
 		</array>
+		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>2345B220-18B0-4F70-9DD7-B7A20763FFBC</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
 		<key>DA9FB2AC-0A0A-463D-B07A-B25CD699C24C</key>
 		<array>
 			<dict>
@@ -478,13 +514,26 @@
 			</dict>
 			<dict>
 				<key>destinationuid</key>
-				<string>07D6395E-9C36-4E80-899A-736B6654F06A</string>
+				<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
 				<key>modifiers</key>
 				<integer>1048576</integer>
 				<key>modifiersubtext</key>
 				<string>Start new chat</string>
 				<key>vitoclose</key>
 				<true/>
+			</dict>
+		</array>
+		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>84A47CA0-9D2D-4F06-A7AD-71C5DEF87663</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
 			</dict>
 		</array>
 		<key>E5D42111-A4E5-4C7E-AED9-B0A379A66986</key>
@@ -504,7 +553,7 @@
 		<array>
 			<dict>
 				<key>destinationuid</key>
-				<string>B0805A79-AA30-432C-A7DD-18F900E79413</string>
+				<string>74890339-2177-4514-B0CD-9D06DF626D21</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -523,6 +572,19 @@
 				<string></string>
 				<key>vitoclose</key>
 				<false/>
+			</dict>
+		</array>
+		<key>E8F4A2B1-6C3D-4E5F-9012-3456789ABCDE</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>B2F04B2C-63AD-4A6D-9A81-7F333D0A075A</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<true/>
 			</dict>
 		</array>
 		<key>F4D88498-0A97-492F-989F-26182BFEEE31</key>
@@ -589,50 +651,11 @@
 				<false/>
 			</dict>
 		</array>
-		<key>E8F4A2B1-6C3D-4E5F-9012-3456789ABCDE</key>
+		<key>8296D113-E0FA-47B8-8279-E92E5E6F64B6</key>
 		<array>
 			<dict>
 				<key>destinationuid</key>
-				<string>B2F04B2C-63AD-4A6D-9A81-7F333D0A075A</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<true/>
-			</dict>
-		</array>
-		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>2345B220-18B0-4F70-9DD7-B7A20763FFBC</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>84A47CA0-9D2D-4F06-A7AD-71C5DEF87663</string>
+				<string>74890339-2177-4514-B0CD-9D06DF626D21</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -700,14 +723,16 @@
 			<dict>
 				<key>argumenttype</key>
 				<integer>1</integer>
+				<key>keyword</key>
+				<string>ask</string>
 				<key>skipuniversalaction</key>
 				<true/>
 				<key>subtext</key>
-				<string>Optionally add a line of text which will be prepended to the input</string>
+				<string>↩ Add context · ⌘↩ New chat with this question</string>
 				<key>text</key>
-				<string>Add Context</string>
+				<string>ask</string>
 				<key>withspace</key>
-				<false/>
+				<true/>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.input.keyword</string>
@@ -1016,9 +1041,9 @@ kill "${pid_stream}"
 						<key>matchcasesensitive</key>
 						<false/>
 						<key>matchmode</key>
-						<integer>5</integer>
+						<integer>0</integer>
 						<key>matchstring</key>
-						<string></string>
+						<string>1</string>
 						<key>outputlabel</key>
 						<string>New Chat</string>
 						<key>uid</key>
@@ -1061,6 +1086,28 @@ kill "${pid_stream}"
 			<key>config</key>
 			<dict>
 				<key>argument</key>
+				<string></string>
+				<key>passthroughargument</key>
+				<true/>
+				<key>variables</key>
+				<dict>
+					<key>init_question</key>
+					<string>{query}</string>
+					<key>new_chat</key>
+					<string>1</string>
+				</dict>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.utility.argument</string>
+			<key>uid</key>
+			<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>argument</key>
 				<string>{var:init_question}</string>
 				<key>passthroughargument</key>
 				<false/>
@@ -1083,7 +1130,7 @@ kill "${pid_stream}"
 				<key>argument</key>
 				<string></string>
 				<key>passthroughargument</key>
-				<false/>
+				<true/>
 				<key>variables</key>
 				<dict>
 					<key>init_question</key>
@@ -1313,6 +1360,8 @@ function run() {
 				<dict>
 					<key>init_question</key>
 					<string>{query}</string>
+					<key>new_chat</key>
+					<string>0</string>
 				</dict>
 			</dict>
 			<key>type</key>
@@ -1330,7 +1379,10 @@ function run() {
 				<key>passthroughargument</key>
 				<false/>
 				<key>variables</key>
-				<dict/>
+				<dict>
+					<key>new_chat</key>
+					<string>{var:new_chat}</string>
+				</dict>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.utility.argument</string>
@@ -1702,6 +1754,8 @@ function run() {
 				<dict>
 					<key>chat_history_save</key>
 					<string>1</string>
+					<key>new_chat</key>
+					<string>0</string>
 					<key>replace_with_chat</key>
 					<string>{query}</string>
 				</dict>
@@ -1867,16 +1921,16 @@ function run(argv) {
 		<dict>
 			<key>config</key>
 			<dict>
+				<key>donotshowmodhint</key>
+				<false/>
 				<key>hotkey</key>
-				<integer>20</integer>
+				<integer>19</integer>
+				<key>hotkeyLabel</key>
+				<string>Open recent chat</string>
 				<key>hotmod</key>
 				<integer>1048576</integer>
 				<key>leftcursor</key>
 				<false/>
-				<key>donotshowmodhint</key>
-				<false/>
-				<key>hotkeyLabel</key>
-				<string>Open recent chat</string>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.trigger.hotkey</string>
@@ -1919,6 +1973,8 @@ function run(argv) {
 				<dict>
 					<key>chat_history_save</key>
 					<string>1</string>
+					<key>new_chat</key>
+					<string>0</string>
 					<key>replace_with_chat</key>
 					<string>{query}</string>
 				</dict>
@@ -2212,6 +2268,15 @@ Override API endpoints via Workflow Environment Variables:
 			<key>ypos</key>
 			<real>455.0</real>
 		</dict>
+		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
+		<dict>
+			<key>colorindex</key>
+			<integer>4</integer>
+			<key>xpos</key>
+			<real>65.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
+		</dict>
 		<key>C6E0966E-A4F8-4DC1-8373-F247FA06A251</key>
 		<dict>
 			<key>colorindex</key>
@@ -2237,6 +2302,13 @@ Override API endpoints via Workflow Environment Variables:
 			<key>ypos</key>
 			<real>55.0</real>
 		</dict>
+		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
+		<dict>
+			<key>xpos</key>
+			<real>280.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
+		</dict>
 		<key>DA9FB2AC-0A0A-463D-B07A-B25CD699C24C</key>
 		<dict>
 			<key>colorindex</key>
@@ -2245,6 +2317,13 @@ Override API endpoints via Workflow Environment Variables:
 			<real>65.0</real>
 			<key>ypos</key>
 			<real>325.0</real>
+		</dict>
+		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
+		<dict>
+			<key>xpos</key>
+			<real>495.0</real>
+			<key>ypos</key>
+			<real>540.0</real>
 		</dict>
 		<key>E5D42111-A4E5-4C7E-AED9-B0A379A66986</key>
 		<dict>
@@ -2259,6 +2338,22 @@ Override API endpoints via Workflow Environment Variables:
 			<real>2330.0</real>
 			<key>ypos</key>
 			<real>215.0</real>
+		</dict>
+		<key>E8F4A2B1-6C3D-4E5F-9012-3456789ABCDE</key>
+		<dict>
+			<key>colorindex</key>
+			<integer>5</integer>
+			<key>xpos</key>
+			<real>65.0</real>
+			<key>ypos</key>
+			<real>460.0</real>
+		</dict>
+		<key>F1A2B3C4-D5E6-4789-A012-3456789FEDCB</key>
+		<dict>
+			<key>xpos</key>
+			<real>1240.0</real>
+			<key>ypos</key>
+			<real>520.0</real>
 		</dict>
 		<key>F4D88498-0A97-492F-989F-26182BFEEE31</key>
 		<dict>
@@ -2287,45 +2382,6 @@ Override API endpoints via Workflow Environment Variables:
 			<real>65.0</real>
 			<key>ypos</key>
 			<real>190.0</real>
-		</dict>
-		<key>E8F4A2B1-6C3D-4E5F-9012-3456789ABCDE</key>
-		<dict>
-			<key>xpos</key>
-			<real>65.0</real>
-			<key>ypos</key>
-			<real>460.0</real>
-			<key>colorindex</key>
-			<integer>5</integer>
-		</dict>
-		<key>F1A2B3C4-D5E6-4789-A012-3456789FEDCB</key>
-		<dict>
-			<key>xpos</key>
-			<real>1240.0</real>
-			<key>ypos</key>
-			<real>520.0</real>
-		</dict>
-		<key>C3A9D1E2-4F5B-6A7C-8D9E-0F1A2B3C4D5E</key>
-		<dict>
-			<key>xpos</key>
-			<real>65.0</real>
-			<key>ypos</key>
-			<real>540.0</real>
-			<key>colorindex</key>
-			<integer>4</integer>
-		</dict>
-		<key>D4B0E2F3-5A6C-7B8D-9E0F-1A2B3C4D5E6F</key>
-		<dict>
-			<key>xpos</key>
-			<real>280.0</real>
-			<key>ypos</key>
-			<real>540.0</real>
-		</dict>
-		<key>E5C1F3A4-6B7D-8C9E-0F0A-2B3C4D5E6F7</key>
-		<dict>
-			<key>xpos</key>
-			<real>495.0</real>
-			<key>ypos</key>
-			<real>540.0</real>
 		</dict>
 	</dict>
 	<key>userconfigurationconfig</key>
@@ -2380,12 +2436,28 @@ Override API endpoints via Workflow Environment Variables:
 				<key>pairs</key>
 				<array>
 					<array>
+						<string>OpenAI (兼容)</string>
+						<string>openai</string>
+					</array>
+					<array>
+						<string>Anthropic (Claude)</string>
+						<string>anthropic</string>
+					</array>
+					<array>
 						<string>DeepSeek</string>
 						<string>deepseek</string>
 					</array>
 					<array>
 						<string>MiniMax</string>
 						<string>minimax</string>
+					</array>
+					<array>
+						<string>Ollama (本地)</string>
+						<string>ollama</string>
+					</array>
+					<array>
+						<string>Custom OpenAI</string>
+						<string>openai_custom</string>
 					</array>
 				</array>
 			</dict>
@@ -2652,6 +2724,115 @@ Override API endpoints via Workflow Environment Variables:
 		<dict>
 			<key>config</key>
 			<dict>
+				<key>defaultvalue</key>
+				<integer>10</integer>
+				<key>markercount</key>
+				<integer>6</integer>
+				<key>maxvalue</key>
+				<integer>30</integer>
+				<key>minvalue</key>
+				<integer>5</integer>
+				<key>onlystoponmarkers</key>
+				<true/>
+				<key>showmarkers</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Run background memory review every N user turns (0 disables).</string>
+			<key>label</key>
+			<string>Memory Nudge Interval</string>
+			<key>type</key>
+			<string>slider</string>
+			<key>variable</key>
+			<string>memory_nudge_interval</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>1</string>
+				<key>text</key>
+				<string>Enable automatic memory review after conversations</string>
+			</dict>
+			<key>description</key>
+			<string>Allow background review to write MEMORY.md / USER.md with [auto] entries.</string>
+			<key>label</key>
+			<string>Auto Memory Review</string>
+			<key>type</key>
+			<string>checkbox</string>
+			<key>variable</key>
+			<string>memory_auto_write</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>defaultvalue</key>
+				<integer>5</integer>
+				<key>markercount</key>
+				<integer>4</integer>
+				<key>maxvalue</key>
+				<integer>10</integer>
+				<key>minvalue</key>
+				<integer>2</integer>
+				<key>onlystoponmarkers</key>
+				<true/>
+				<key>showmarkers</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Maximum local tool iterations per request in model-driven tool use.</string>
+			<key>label</key>
+			<string>Max Tool Iterations</string>
+			<key>type</key>
+			<string>slider</string>
+			<key>variable</key>
+			<string>max_tool_iterations</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+				<key>placeholder</key>
+				<string>/path/to/AGENTS.md</string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Optional project context file injected into system prompt. Defaults to vault AGENTS.md.</string>
+			<key>label</key>
+			<string>Context File Path</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>context_file_path</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+				<key>placeholder</key>
+				<string>~/.../memories/SOUL.md</string>
+				<key>required</key>
+				<false/>
+				<key>trim</key>
+				<true/>
+			</dict>
+			<key>description</key>
+			<string>Agent soul/persona file (SOUL.md). Default: workflow data memories/SOUL.md</string>
+			<key>label</key>
+			<string>Soul File Path</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>soul_file_path</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
 				<key>default</key>
 				<string>You</string>
 				<key>placeholder</key>
@@ -2712,17 +2893,207 @@ Override API endpoints via Workflow Environment Variables:
 			<key>variable</key>
 			<string>system_prompt</string>
 		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>all</string>
+				<key>pairs</key>
+				<array>
+					<array>
+						<string>All tools (recommended)</string>
+						<string>all</string>
+					</array>
+					<array>
+						<string>File + Obsidian only</string>
+						<string>file,obsidian</string>
+					</array>
+					<array>
+						<string>File + Memory only</string>
+						<string>file,memory</string>
+					</array>
+					<array>
+						<string>Read-only (file_read, obsidian_*, memory.list, task_list, session_search)</string>
+						<string>read_only</string>
+					</array>
+				</array>
+			</dict>
+			<key>description</key>
+			<string>Comma-separated toolset whitelist. 留空=全部启用。预设:all / file,obsidian / file,memory / read_only。</string>
+			<key>label</key>
+			<string>Enabled Toolsets</string>
+			<key>type</key>
+			<string>popupbutton</string>
+			<key>variable</key>
+			<string>enabled_toolsets</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+			</dict>
+			<key>description</key>
+			<string>OpenAI / OpenRouter / SGLang etc. API key</string>
+			<key>label</key>
+			<string>OpenAI API Key</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_api_key</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+			</dict>
+			<key>description</key>
+			<string>API base URL (default https://api.openai.com/v1)</string>
+			<key>label</key>
+			<string>OpenAI Base URL</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_base_url</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>gpt-4o</string>
+			</dict>
+			<key>description</key>
+			<string>Model name (default gpt-4o)</string>
+			<key>label</key>
+			<string>OpenAI Model</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_model</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+			</dict>
+			<key>description</key>
+			<string>Anthropic/Claude API key</string>
+			<key>label</key>
+			<string>Anthropic API Key</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>anthropic_api_key</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>claude-sonnet-4-20250514</string>
+			</dict>
+			<key>description</key>
+			<string>Model name (default claude-sonnet-4-20250514)</string>
+			<key>label</key>
+			<string>Anthropic Model</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>anthropic_model</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>http://localhost:11434/v1</string>
+			</dict>
+			<key>description</key>
+			<string>Ollama API base (default http://localhost:11434/v1)</string>
+			<key>label</key>
+			<string>Ollama Base URL</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>ollama_base_url</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>llama3.2</string>
+			</dict>
+			<key>description</key>
+			<string>Model name (default llama3.2)</string>
+			<key>label</key>
+			<string>Ollama Model</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>ollama_model</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>https://api.openai.com/v1</string>
+			</dict>
+			<key>description</key>
+			<string>Custom OpenAI-compatible base URL</string>
+			<key>label</key>
+			<string>Custom OpenAI Base URL</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_custom_base_url</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string></string>
+			</dict>
+			<key>description</key>
+			<string>API key (leave empty for no-auth)</string>
+			<key>label</key>
+			<string>Custom OpenAI API Key</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_custom_api_key</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
+				<string>gpt-4o</string>
+			</dict>
+			<key>description</key>
+			<string>Model name (default gpt-4o)</string>
+			<key>label</key>
+			<string>Custom OpenAI Model</string>
+			<key>type</key>
+			<string>textfield</string>
+			<key>variable</key>
+			<string>openai_custom_model</string>
+		</dict>
 	</array>
 	<key>variables</key>
 	<dict>
+		<key>chat_provider</key>
+		<string>minimax</string>
 		<key>deepseek_api_endpoint</key>
 		<string></string>
 		<key>minimax_api_endpoint</key>
 		<string></string>
+		<key>provider_single</key>
+		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.5.4</string>
+	<string>1.8.3</string>
 	<key>webaddress</key>
 	<string></string>
+	<key>workflow_version</key>
+	<string>W6 (rename → recent chat 不再空白)</string>
 </dict>
 </plist>

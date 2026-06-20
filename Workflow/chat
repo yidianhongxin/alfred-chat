@@ -97,6 +97,27 @@ function demoteMarkdownHeadings(text, bump = 3) {
   })
 }
 
+function isHangingPreamble(text) {
+  const t = (text || "").trim()
+  if (!t) return true
+  if (/[:：]\s*$/.test(t)) return true
+  if (t.length > 140) return false
+  const resultMarker = /(因为|所以|结论|建议|步骤|方法|答案|如下|http|无法|不能|没有|不支持|你可以|要不|或者|第一|结果是|^\s*\d+\.)/m
+  if (resultMarker.test(t)) return false
+  const sentences = t.split(/[。.!！?？\n]+/).map(s => s.trim()).filter(Boolean)
+  if (sentences.length === 0) return true
+  const intentVerb = /(看下|看一下|看看|先看|查下|查一下|查查|搜下|搜一下|抓下|抓一下|试下|试一下|我试|去查|去看|去搜|去抓|并行查|查几个|搜几个|目录结构|目录里有|目录有|稍等|接下来|马上|这就|我来|让我|我先|我直接|我去)/
+  return sentences.every(s => intentVerb.test(s))
+}
+
+const HANGING_PREAMBLE_NOTE = "（说明：我每条回复都是完整的，没有“回复后再继续执行”的能力，也无法联网搜索或运行 baoyu/外部脚本。请把链接或正文直接贴进来，我可帮你写入本地文件 / Obsidian 或做本地处理；要查实时新闻请告诉我已知事实，我基于它继续。）"
+
+function withHangingPreambleFallback(text) {
+  if (!isHangingPreamble(text)) return text
+  const base = (text || "").trim()
+  return base ? `${base}\n\n${HANGING_PREAMBLE_NOTE}` : HANGING_PREAMBLE_NOTE
+}
+
 function formatUserLabel(labels) {
   return `# ⊙ ${labels.user}`
 }
@@ -131,38 +152,109 @@ function markdownSession(session, ignoreLastInterrupted = true) {
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
 }
 
-function memoryPrompt(memoryPath) {
-  const memory = readJson(memoryPath, {})
-  const lines = []
-  const maxMemoryChars = 6000
+function markdownSessionWithDraft(chatFile, draftText) {
+  const session = readSession(chatFile)
+  const messages = session.messages.slice()
+  if (messages.length > 0 && messages[messages.length - 1]["role"] === "user" && draftText)
+    messages.push({ role: "assistant", content: draftText })
 
-  Object.keys(memory).sort().forEach(key => {
-    if (key === "_notes") return
-    lines.push(`- ${key}: ${memory[key]}`)
-  })
+  return markdownSession({ title: session.title, messages }, false)
+}
 
-  if (Array.isArray(memory["_notes"])) {
-    memory["_notes"].forEach(item => {
-      if (item && item.content) lines.push(`- ${item.content}`)
-    })
+function outputTokenLimit() {
+  const configured = parseInt(envVar("max_output_tokens"))
+  return Number.isFinite(configured) && configured > 0 ? configured : 4096
+}
+
+function streamMaxSeconds(timeoutSeconds) {
+  const configured = parseInt(envVar("stream_max_seconds"))
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return Math.min(Math.max(timeoutSeconds * 4, 120), 300)
+}
+
+function streamIdleSeconds(timeoutSeconds) {
+  const configured = parseInt(envVar("stream_idle_seconds"))
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return Math.max(timeoutSeconds * 3, 90)
+}
+
+function skillsPrompt(query) {
+  if (skillsPrompt._cache && skillsPrompt._cache.query === (query || "")) {
+    return skillsPrompt._cache.value
   }
+  const result = runLocalAgentWithArguments(["--skills-prompt", query || ""])
+  let value = ""
+  if (result && typeof result === "string" && result.trim().length > 0) {
+    value = result.trim()
+  }
+  skillsPrompt._cache = { query: query || "", value: value }
+  return value
+}
 
-  if (lines.length === 0) return ""
+function memoryPrompt() {
+  const legacy = `${envVar("alfred_workflow_data")}/memory.json`
+  const memDir = `${envVar("alfred_workflow_data")}/memories`
+  if (fileExists(legacy) && !fileExists(`${memDir}/MEMORY.md`) && !fileExists(`${memDir}/USER.md`))
+    runLocalAgentWithArguments(["--migrate-memory"])
 
-  let body = lines.join("\n")
-  if (body.length > maxMemoryChars)
-    body = `${body.slice(0, maxMemoryChars)}\n- [长期记忆过长，已截断]`
+  const result = runLocalAgentWithArguments(["--memory-prompt"])
+  if (result && result.prompt && result.prompt.trim().length > 0)
+    return result.prompt
 
+  return ""
+}
+
+function soulPrompt() {
+  runLocalAgentWithArguments(["--ensure-soul"])
+
+  const result = runLocalAgentWithArguments(["--soul-prompt"])
+  if (result && result.prompt && result.prompt.trim().length > 0)
+    return result.prompt
+
+  return ""
+}
+
+function runtimeGuardPrompt() {
   return [
-    "以下是用户要求长期记住的背景信息和使用偏好。回答时请主动遵守，不要声称自己无法跨对话记住；这些内容来自本地 memory.json：",
-    "",
-    body
+    "【运行约束 · 最高优先级，与上文任何“主动去做”的指令冲突时以本节为准】",
+    "你在一个单轮流式对话里运行：本次回复结束后没有自动续跑，你写下的任何“等会儿/接下来我会去做”的动作都不会真的发生。",
+    "你实际拥有的能力（仅这些，由本地 Agent 在你回复前自动完成，你无法在回复中途临时调用）：",
+    "- 读写 /Users/DRLer 下的本地文件、Obsidian 库；新增提醒；读写长期记忆。",
+    "你没有的能力（绝不要声称会去做）：",
+    "- 联网搜索、打开网页、抓取新闻、调用外部脚本或 Claude/baoyu 等技能、查询外部数据库、等待后续结果。",
+    "硬性输出规则：",
+    "- 禁止用“我先看下…”“我去查一下”“让我并行查几个来源”“稍等/接下来我来…”这类只表态不给结果的句子作为整段回复或结尾。",
+    "- 遇到联网/抓取/跑外部技能这类你做不到的请求：直接一句话说明当前环境不能联网或执行外部脚本，然后给出基于已知信息的判断，或请用户把链接/正文贴进来由你处理本地文件。",
+    "- 每次回复都必须当场给出完整结论、可执行答案、或一个明确的问题；不要以冒号、引导语、未完成的计划收尾。"
   ].join("\n")
 }
 
-function composeSystemPrompt(systemPrompt, memoryPath) {
-  const memory = memoryPrompt(memoryPath)
-  return [systemPrompt, memory].filter(item => item && item.trim().length > 0).join("\n\n")
+function composeSystemPrompt(systemPrompt, userQuery) {
+  const soul = soulPrompt()
+  const memory = memoryPrompt()
+  const contextFile = loadContextFile()
+  const skills = skillsPrompt(userQuery || "")
+  return [soul, systemPrompt, contextFile, skills, memory, runtimeGuardPrompt()].filter(item => item && item.trim().length > 0).join("\n\n")
+}
+
+function loadContextFile() {
+  const configured = (envVar("context_file_path") || "").trim()
+  const vaultAgents = (envVar("obsidian_vault_path") || "").trim()
+  const candidates = [
+    configured,
+    vaultAgents ? `${vaultAgents}/AGENTS.md` : ""
+  ].filter(path => path && fileExists(path))
+
+  if (candidates.length === 0) return ""
+
+  const content = readFile(candidates[0]).trim()
+  if (!content) return ""
+
+  return [
+    `以下是项目上下文（来自 ${candidates[0]}）：`,
+    "",
+    content
+  ].join("\n")
 }
 
 function yamlScalar(value) {
@@ -249,6 +341,34 @@ function localAgentScriptPath() {
   return "local_agent.py"
 }
 
+function workflowScriptPath(name) {
+  const base = localAgentScriptPath().replace(/local_agent\.py$/, "")
+  return `${base}${name}`
+}
+
+function spawnDetachedPython(scriptName, args) {
+  const task = $.NSTask.alloc.init
+  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+  task.arguments = [workflowScriptPath(scriptName)].concat(args || [])
+  task.standardOutput = $.NSFileHandle.fileHandleWithNullDevice
+  task.standardError = $.NSFileHandle.fileHandleWithNullDevice
+  task.launchAndReturnError(false)
+}
+
+function maybeTriggerBackgroundReview(chatFile) {
+  if (envVar("memory_auto_write") === "0") return
+
+  const interval = parseInt(envVar("memory_nudge_interval")) || 10
+  const turns = countTurns(readSession(chatFile).messages)
+  if (turns === 0 || turns % interval !== 0) return
+
+  spawnDetachedPython("background_review.py", [])
+}
+
+function maybeIndexSession() {
+  spawnDetachedPython("session_index.py", [])
+}
+
 function runLocalAgentWithArguments(args) {
   const task = $.NSTask.alloc.init
   const stdout = $.NSPipe.pipe
@@ -297,6 +417,29 @@ function runLocalAgentWithArguments(args) {
   }
 }
 
+function triggerCuratorTick() {
+  // 异步(同步 spawn 但快速返回)调 --curator-tick,失败静默。
+  // 减法版: 24h 节流在 curator.py 内部,这里只触发。
+  try {
+    const task = $.NSTask.alloc.init
+    const stdout = $.NSPipe.pipe
+    const stderr = $.NSPipe.pipe
+    task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+    task.arguments = [localAgentScriptPath(), "--curator-tick"]
+    task.standardOutput = stdout
+    task.standardError = stderr
+    task.launchAndReturnError(false)
+    let waitedMs = 0
+    while (task.running && waitedMs < 1500) {
+      delay(0.05)
+      waitedMs += 50
+    }
+    if (task.running) task.terminate()
+  } catch (e) {
+    // 静默:curator 失败不能影响主聊天
+  }
+}
+
 function runLocalAgent(typedQuery) {
   return runLocalAgentWithArguments([typedQuery])
 }
@@ -305,28 +448,49 @@ function runLocalAgentTool(toolCall) {
   return runLocalAgentWithArguments(["--tool", JSON.stringify(toolCall)])
 }
 
+function looksLikeSkillifyQuery(text) {
+  const trimmed = text.trim()
+  return /(?:生成|创建|提炼|固化|写成|整理成|做成|转成|转化为).*(?:skill|skills|Skill|技能)/i.test(trimmed) ||
+    /(?:skill|skills|Skill|技能).*(?:生成|创建|提炼|固化|写成|整理成|做成)/i.test(trimmed) ||
+    /^\/skillify/i.test(trimmed)
+}
+
 function looksLikeLocalAgentQuery(text) {
+  const trimmed = text.trim()
+  if (looksLikeSkillifyQuery(trimmed)) {
+    return true
+  }
+
   const fileHint = "([/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
 
-  return /^确认执行$/i.test(text) ||
-    /^(取消|取消执行)$/i.test(text) ||
-    /^(撤销上一步|undo last)$/i.test(text) ||
-    /^@\//.test(text) ||
-    /^\/Users\/DRLer\//.test(text) ||
-    /桌面(?:上)?(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)/i.test(text) ||
-    /(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)(?:到)?桌面/i.test(text) ||
-    new RegExp(`(创建|新建|写入|追加|附加|替换|删除|移除|读取|查看).*${fileHint}`, "i").test(text) ||
-    new RegExp(`${fileHint}.*(内容|正文)[:：]`, "i").test(text) ||
-    /^(列出|新增|完成)任务/i.test(text) ||
-    /^记住/i.test(text) ||
-    /^(你)?记住/i.test(text) ||
-    /^列出记忆$/i.test(text) ||
-    /^搜索(?:OB|Obsidian|ob)/i.test(text) ||
-    /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(text) ||
-    /(读|读取|查看).*(OB|Obsidian|ob).*(今天|今日)日记/i.test(text) ||
-    /^(读|读取|查看)?(今天|今日)日记$/i.test(text) ||
-    /^运行命令[:：]/i.test(text) ||
-    /提醒/i.test(text)
+  return /^确认执行$/i.test(trimmed) ||
+    /^(取消|取消执行)$/i.test(trimmed) ||
+    /^(撤销上一步|undo last)$/i.test(trimmed) ||
+    /^@\//.test(trimmed) ||
+    /^(?:读取|查看|打开|写入|新建|创建|删除|追加|替换|列出|移动|总结)\s+\/Users\/DRLer\//i.test(trimmed) ||
+    /^\/Users\/DRLer\/[^\s]*\s*$/i.test(trimmed) ||
+    /桌面(?:上)?(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)/i.test(trimmed) ||
+    /(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)(?:到)?桌面/i.test(trimmed) ||
+    new RegExp(`(创建|新建|写入|追加|附加|替换|删除|移除|读取|查看).*${fileHint}`, "i").test(trimmed) ||
+    new RegExp(`${fileHint}.*(内容|正文)[:：]`, "i").test(trimmed) ||
+    /^(列出|新增|完成)任务/i.test(trimmed) ||
+    /^记住/i.test(trimmed) ||
+    /^(你)?记住/i.test(trimmed) ||
+    /^列出记忆$/i.test(trimmed) ||
+    /^(?:查看|列出|读取|显示)?灵魂$/i.test(trimmed) ||
+    /(?:写入|更新|设定|追加)灵魂/i.test(trimmed) ||
+    /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(trimmed) ||
+    /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(trimmed) ||
+    /^搜索(?:OB|Obsidian|ob)/i.test(trimmed) ||
+    /(?:OB|Obsidian|ob)库/i.test(trimmed) ||
+    /(?:新建|创建|写入)(?:一篇|一个|一份|到)?\s*(?:0\.inbox|10\.DL)/i.test(trimmed) ||
+    /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(trimmed) ||
+    /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(trimmed) ||
+    /(?:翻阅|回顾|随便读|随机读|最近|近\s*\d+\s*(?:天|篇)).*(?:日记|OB|Obsidian|ob)/i.test(trimmed) ||
+    /(读|读取|查看).*(OB|Obsidian|ob).*(今天|今日)日记/i.test(trimmed) ||
+    /^(读|读取|查看)?(今天|今日)日记$/i.test(trimmed) ||
+    /^运行命令[:：]/i.test(trimmed) ||
+    /提醒/i.test(trimmed)
 }
 
 function handleLocalFileControl(chatFile, typedQuery) {
@@ -343,20 +507,79 @@ function handleLocalFileControl(chatFile, typedQuery) {
   )
 }
 
-function runChatCompletion(apiEndpoint, apiKey, payload, timeoutSeconds) {
+function runWorkflowPython(scriptName, args, timeoutSeconds) {
   const task = $.NSTask.alloc.init
   const stdout = $.NSPipe.pipe
   const stderr = $.NSPipe.pipe
 
+  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+  task.arguments = [workflowScriptPath(scriptName)].concat(args || [])
+  task.standardOutput = stdout
+  task.standardError = stderr
+  task.launchAndReturnError(false)
+
+  let waitedMs = 0
+  const limitMs = (timeoutSeconds || 30) * 1000
+  while (task.running && waitedMs < limitMs) {
+    delay(0.05)
+    waitedMs += 50
+  }
+
+  if (task.running) {
+    task.terminate()
+    return { error: "Python 脚本执行超时" }
+  }
+
+  const output = $.NSString.alloc.initWithDataEncoding(
+    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+  const errorOutput = $.NSString.alloc.initWithDataEncoding(
+    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+
+  if (task.terminationStatus !== 0) return { error: errorOutput || output }
+
+  try {
+    return JSON.parse(output)
+  } catch {
+    return { error: output || "Python 脚本返回异常" }
+  }
+}
+
+function runProviderBridgeComplete(provider, payload, timeoutSeconds) {
+  const bridgePayload = {
+    provider: provider.provider,
+    model: payload.model || provider.model,
+    messages: payload.messages || [],
+    temperature: payload.temperature
+  }
+  const result = runWorkflowPython("provider_bridge.py", ["--complete", JSON.stringify(bridgePayload)], timeoutSeconds)
+  if (result.error) return { error: result.error }
+  return { content: result.content || "" }
+}
+
+function runChatCompletion(provider, payload, timeoutSeconds) {
+  if (provider.apiStyle === "anthropic") {
+    return runProviderBridgeComplete(provider, payload, timeoutSeconds)
+  }
+
+  const task = $.NSTask.alloc.init
+  const stdout = $.NSPipe.pipe
+  const stderr = $.NSPipe.pipe
+  const requestPayload = Object.assign({}, payload)
+
+  if (provider.supportsThinkingParam && requestPayload.stream === false) {
+    requestPayload.thinking = { type: "disabled" }
+  }
+
   task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  task.arguments = [
-    apiEndpoint,
+  var curlArgs = [
+    provider.endpoint,
     "--max-time", timeoutSeconds.toString(),
     "--silent",
-    "--header", "Content-Type: application/json",
-    "--header", `Authorization: Bearer ${apiKey}`,
-    "--data", JSON.stringify(payload)
+    "--header", "Content-Type: application/json"
   ]
+  if (provider.apiKey) curlArgs.push("--header", "Authorization: Bearer " + provider.apiKey)
+  curlArgs.push("--data", JSON.stringify(requestPayload))
+  task.arguments = curlArgs
   task.standardOutput = stdout
   task.standardError = stderr
   task.launchAndReturnError(false)
@@ -404,6 +627,23 @@ function extractJsonObject(text) {
   }
 }
 
+function loadToolSchemas() {
+  if (loadToolSchemas._cache) return loadToolSchemas._cache
+  const result = runLocalAgentWithArguments(["--tool-schema"])
+  if (!result || !result.handled) {
+    loadToolSchemas._cache = []
+    return loadToolSchemas._cache
+  }
+  try {
+    const schemas = JSON.parse(result.assistant_text || "[]")
+    loadToolSchemas._cache = Array.isArray(schemas) ? schemas : []
+    return loadToolSchemas._cache
+  } catch (e) {
+    loadToolSchemas._cache = []
+    return loadToolSchemas._cache
+  }
+}
+
 function toolRouterPrompt() {
   return [
     "你是 Alfred Chat 的工具路由器。判断用户请求是否需要调用本地工具。",
@@ -411,27 +651,19 @@ function toolRouterPrompt() {
     "如果不需要工具，返回 {\"tool\":\"none\",\"args\":{}}。",
     "只有当用户明确要求读写本地文件、Obsidian、任务、记忆、白名单命令或撤销时才调用工具。",
     "普通知识问答、写作、解释、关于文件操作方法的问题都返回 none。",
-    "可用工具：",
-    "- read_file {path}",
-    "- write_file {path, content}",
-    "- append_file {path, content}",
-    "- replace_file {path, old_text, new_text}",
-    "- delete_file {path}",
-    "- list_dir {path, ext}",
-    "- move_ext {path, ext, dest}",
-    "- obsidian_search {term}",
-    "- obsidian_daily_read {}",
-    "- obsidian_daily_append {content}",
-    "- task_add {text}",
-    "- task_list {}",
-    "- task_done {id}",
-    "- reminder_add {title, due, list?} — 写入 macOS 提醒事项，due 用 ISO 本地时间如 2026-06-18T09:30:00",
-    "- memory_set {key, value}",
-    "- memory_append {note}",
-    "- memory_list {}",
-    "- shell {command}，只适合 ls/pwd/mkdir",
-    "- undo {}",
+    `${loadToolSchemas().map(s => {
+      const params = s.parameters && s.parameters.properties ?
+        Object.entries(s.parameters.properties).map(([k, v]) => `${k}${s.parameters.required && s.parameters.required.includes(k) ? "" : "?"}:${v.type || "any"}`).join(", ") :
+        ""
+      return `- ${s.name} {${params}}${s.description ? " — " + s.description : ""}`
+    }).join("\n")}`,
     "路径规则：用户说桌面就是 Desktop；裸文件名如 123.txt 默认桌面。",
+    "OB 规则：用户问能否读取 OB 库、翻阅日记、读最近日记、读写 OB 文件，都应调用对应 obsidian_* 工具。",
+    "示例：你能读到OB库的内容么？ -> {\"tool\":\"obsidian_status\",\"args\":{}}",
+    "示例：翻阅一下OB库里的日记 -> {\"tool\":\"obsidian_diary_browse\",\"args\":{}}",
+    "示例：读下最近2天日记 -> {\"tool\":\"obsidian_diary_recent\",\"args\":{\"count\":2}}",
+    "示例：列出0.inbox里的文章 -> {\"tool\":\"obsidian_list\",\"args\":{\"path\":\"0.inbox\"}}",
+    "示例：写入OB 0.inbox/test.md 内容：hello -> {\"tool\":\"obsidian_write\",\"args\":{\"path\":\"0.inbox/test.md\",\"content\":\"hello\"}}",
     "示例：读下ob库今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
     "示例：帮我总结今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
     "示例：早上9点30提醒我打卡 -> {\"tool\":\"none\",\"args\":{}}（本地直接解析，不走模型）",
@@ -440,23 +672,31 @@ function toolRouterPrompt() {
 }
 
 function mayNeedModelToolUse(text) {
+  if (looksLikeSkillifyQuery(text)) return false
+
   const fileHint = "(@?\\/Users\\/DRLer\\/|^@?~\\/|[/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
   const actionWords = "(读|读取|查看|看看|打开|总结|分析|整理|搜索|查找|写入|写到|新建|创建|追加|附加|替换|删除|移除|列出|移动|撤销)"
   const dailyActionWords = "(读|读取|查看|看看|总结|分析|整理|追加|写入|写到)"
 
-  return /(?:读|读取|查看|看看|搜索|查找|总结|分析|整理|追加|写入|写到).*(?:OB|Obsidian|ob)/i.test(text) ||
+  return /(?:读|读取|查看|看看|搜索|查找|总结|分析|整理|追加|写入|写到|翻阅|回顾).*(?:OB|Obsidian|ob)/i.test(text) ||
+    /(?:OB|Obsidian|ob)库/i.test(text) ||
+    /(?:新建|创建|写入)(?:一篇|一个|一份|到)?\s*(?:0\.inbox|10\.DL)/i.test(text) ||
+    /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(text) ||
     new RegExp(`${dailyActionWords}[^？?\\n]{0,40}(?:今日日记|今天日记|日记)`, "i").test(text) ||
+    /(?:翻阅|回顾|随便读|随机读|最近|近\s*\d+\s*(?:天|篇)).*(?:日记)/i.test(text) ||
     /^(?:今日日记|今天日记)$/i.test(text) ||
     /提醒/i.test(text) ||
-    /^(?:记住|你记住|新增任务[:：]|列出任务$|完成任务\s*\d+$|撤销上一步$|undo last$)/i.test(text) ||
+    /^(?:记住|你记住|新增任务[:：]|列出任务$|完成任务\s*\d+$|撤销上一步$|undo last$|列出记忆$)/i.test(text) ||
+    /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(text) ||
+    /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(text) ||
     /(?:桌面|Desktop).*(?:文件|txt|md|json|yaml|yml|csv|py|js|ts|plist|读|读取|查看|看看|写入|新建|创建|删除|列出|移动|总结|分析)/i.test(text) ||
     new RegExp(`${actionWords}[^？?\\n]{0,80}${fileHint}`, "i").test(text) ||
     new RegExp(`${fileHint}[^？?\\n]{0,80}${actionWords}`, "i").test(text)
 }
 
-function decideToolUse(apiEndpoint, apiKey, model, typedQuery, timeoutSeconds) {
-  const result = runChatCompletion(apiEndpoint, apiKey, {
-    model: model,
+function decideToolUse(provider, typedQuery, timeoutSeconds) {
+  const result = runChatCompletion(provider, {
+    model: provider.model,
     messages: [
       { role: "system", content: toolRouterPrompt() },
       { role: "user", content: typedQuery }
@@ -476,12 +716,12 @@ function decideToolUse(apiEndpoint, apiKey, model, typedQuery, timeoutSeconds) {
 function shouldFinalizeToolResult(toolCall, typedQuery) {
   const tool = toolCall?.tool || ""
   return /总结|分析|解释|提取|根据|帮我|整理成|改写/i.test(typedQuery) &&
-    ["read_file", "obsidian_daily_read", "obsidian_search", "list_dir", "shell"].includes(tool)
+    ["read_file", "obsidian_daily_read", "obsidian_diary_browse", "obsidian_diary_recent", "obsidian_search", "obsidian_read", "obsidian_list", "obsidian_status", "session_search", "list_dir", "shell"].includes(tool)
 }
 
-function finalizeToolResult(apiEndpoint, apiKey, model, systemPrompt, typedQuery, toolResultText, timeoutSeconds) {
-  const result = runChatCompletion(apiEndpoint, apiKey, {
-    model: model,
+function finalizeToolResult(provider, systemPrompt, typedQuery, toolResultText, timeoutSeconds) {
+  const result = runChatCompletion(provider, {
+    model: provider.model,
     messages: [
       { role: "system", content: systemPrompt || "你是一个有帮助的 AI 助手。" },
       { role: "user", content: `用户原始请求：${typedQuery}\n\n本地工具结果：\n${toolResultText}\n\n请基于工具结果回答用户。` }
@@ -492,30 +732,118 @@ function finalizeToolResult(apiEndpoint, apiKey, model, systemPrompt, typedQuery
   return result.error ? `工具已执行，但模型总结失败：${result.error}\n\n${toolResultText}` : result.content
 }
 
-function handleModelToolUse(chatFile, typedQuery, apiEndpoint, apiKey, model, systemPrompt, timeoutSeconds) {
+function handleModelToolUse(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds) {
   if (!mayNeedModelToolUse(typedQuery.trim())) return null
 
-  const toolCall = decideToolUse(apiEndpoint, apiKey, model, typedQuery, timeoutSeconds)
+  const maxIterations = parseInt(envVar("max_tool_iterations")) || 5
+  let toolCall = decideToolUse(provider, typedQuery, timeoutSeconds)
   if (!toolCall) return null
 
-  const result = runLocalAgentTool(toolCall)
-  if (!result || !result.handled) return null
+  let iterations = 0
+  let combinedText = ""
+  let lastResult = null
+  let lastTool = toolCall.tool
 
-  const toolText = result.assistant_text || "本地工具已执行"
-  const assistantText = shouldFinalizeToolResult(toolCall, typedQuery) && result.status === "success" ?
-    finalizeToolResult(apiEndpoint, apiKey, model, systemPrompt, typedQuery, toolText, timeoutSeconds) :
+  while (toolCall && iterations < maxIterations) {
+    const result = runLocalAgentTool(toolCall)
+    if (!result || !result.handled) return null
+
+    iterations++
+    lastResult = result
+    lastTool = toolCall.tool
+    combinedText = combinedText ?
+      `${combinedText}\n\n[${toolCall.tool}]\n${result.assistant_text || ""}` :
+      (result.assistant_text || "本地工具已执行")
+
+    if (result.status !== "success") break
+
+    const followUpPrompt = [
+      `用户原始请求：${typedQuery}`,
+      `已完成工具：${toolCall.tool}`,
+      `工具结果：${result.assistant_text || ""}`,
+      "若还需要调用其他本地工具，只返回 JSON tool call；否则返回 {\"tool\":\"none\",\"args\":{}}"
+    ].join("\n")
+
+    const nextCall = decideToolUse(provider, followUpPrompt, timeoutSeconds)
+    if (!nextCall || nextCall.tool === "none") break
+    toolCall = nextCall
+  }
+
+  const hitLimit = iterations >= maxIterations && toolCall && toolCall.tool !== "none"
+  const toolText = combinedText || "本地工具已执行"
+  const assistantText = shouldFinalizeToolResult({ tool: lastTool }, typedQuery) && lastResult?.status === "success" ?
+    finalizeToolResult(provider, systemPrompt, typedQuery, toolText, timeoutSeconds) :
     toolText
+
+  const footer = hitLimit ?
+    `已达工具迭代上限（${maxIterations}）` :
+    (lastResult?.footer || assistantText)
 
   return responseWithConversation(
     chatFile,
     typedQuery.trim(),
     assistantText,
-    result.footer || assistantText
+    footer
   )
+}
+
+function providerRequiresApiKey(provider) {
+  return provider.provider !== "ollama"
 }
 
 function resolveProvider() {
   const provider = envVar("chat_provider") || "minimax"
+
+  if (provider === "openai") {
+    const base = envVar("openai_base_url") || "https://api.openai.com/v1"
+    return {
+      provider: "openai",
+      providerName: "OpenAI",
+      apiKey: envVar("openai_api_key") || "",
+      endpoint: base.replace(/\/+$/, "") + "/chat/completions",
+      model: envVar("openai_model") || "gpt-4o",
+      supportsThinkingParam: false,
+      apiStyle: "openai"
+    }
+  }
+
+  if (provider === "anthropic") {
+    return {
+      provider: "anthropic",
+      providerName: "Anthropic",
+      apiKey: envVar("anthropic_api_key") || "",
+      endpoint: "",
+      model: envVar("anthropic_model") || "claude-sonnet-4-20250514",
+      supportsThinkingParam: false,
+      apiStyle: "anthropic"
+    }
+  }
+
+  if (provider === "ollama") {
+    const base = envVar("ollama_base_url") || "http://localhost:11434/v1"
+    return {
+      provider: "ollama",
+      providerName: "Ollama",
+      apiKey: "",
+      endpoint: base.replace(/\/+$/, "") + "/chat/completions",
+      model: envVar("ollama_model") || "llama3.2",
+      supportsThinkingParam: false,
+      apiStyle: "openai"
+    }
+  }
+
+  if (provider === "openai_custom") {
+    const base = envVar("openai_custom_base_url") || "https://api.openai.com/v1"
+    return {
+      provider: "openai_custom",
+      providerName: "Custom OpenAI",
+      apiKey: envVar("openai_custom_api_key") || "",
+      endpoint: base.replace(/\/+$/, "") + "/chat/completions",
+      model: envVar("openai_custom_model") || "gpt-4o",
+      supportsThinkingParam: false,
+      apiStyle: "openai"
+    }
+  }
 
   if (provider === "minimax") {
     const customEndpoint = envVar("minimax_api_endpoint")
@@ -525,23 +853,39 @@ function resolveProvider() {
       "https://api.minimax.io/v1/chat/completions"
 
     return {
+      provider: "minimax",
       providerName: "MiniMax",
       apiKey: envVar("minimax_api_key"),
       endpoint: customEndpoint || defaultEndpoint,
       model: envVar("minimax_model") || "MiniMax-M3",
-      supportsThinkingParam: true
+      supportsThinkingParam: true,
+      apiStyle: "openai"
     }
   }
 
-  const customEndpoint = envVar("deepseek_api_endpoint")
-  const defaultEndpoint = "https://api.deepseek.com/chat/completions"
+  if (provider === "deepseek") {
+    const customEndpoint = envVar("deepseek_api_endpoint")
+    const defaultEndpoint = "https://api.deepseek.com/chat/completions"
+
+    return {
+      provider: "deepseek",
+      providerName: "DeepSeek",
+      apiKey: envVar("deepseek_api_key"),
+      endpoint: customEndpoint || defaultEndpoint,
+      model: envVar("deepseek_model") || "deepseek-v4-flash",
+      supportsThinkingParam: true,
+      apiStyle: "openai"
+    }
+  }
 
   return {
-    providerName: "DeepSeek",
-    apiKey: envVar("deepseek_api_key"),
-    endpoint: customEndpoint || defaultEndpoint,
-    model: envVar("deepseek_model") || "deepseek-v4-flash",
-    supportsThinkingParam: true
+    provider: provider,
+    providerName: provider,
+    apiKey: "",
+    endpoint: "",
+    model: "",
+    supportsThinkingParam: false,
+    apiStyle: "openai"
   }
 }
 
@@ -549,11 +893,41 @@ function chatPayload(model, messages, stream, supportsThinkingParam) {
   const payload = {
     model: model,
     messages: messages,
-    stream: stream
+    stream: stream,
+    max_tokens: outputTokenLimit()
   }
 
   if (supportsThinkingParam) payload.thinking = { type: "disabled" }
   return payload
+}
+
+function runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextChat, timeoutSeconds) {
+  const result = runChatCompletion(provider, {
+    model: provider.model,
+    messages: systemPrompt ?
+      [{ role: "system", content: systemPrompt }].concat(contextChat) :
+      contextChat,
+    stream: false
+  }, timeoutSeconds)
+
+  if (result.error) {
+    return JSON.stringify({
+      response: result.error,
+      behaviour: { response: "replacelast", scroll: "end" }
+    })
+  }
+
+  const assistantText = result.content || ""
+  appendChat(chatFile, { role: "assistant", content: assistantText })
+  maybeTriggerBackgroundReview(chatFile)
+  maybeIndexSession()
+
+  const session = readSession(chatFile)
+  return JSON.stringify({
+    response: markdownSession(session, false),
+    footer: provider.apiStyle === "anthropic" ? "Anthropic 使用非流式回复" : undefined,
+    behaviour: { scroll: "end" }
+  })
 }
 
 function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, supportsThinkingParam = true) {
@@ -567,15 +941,16 @@ function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, stre
   const stdout = $.NSPipe.pipe
 
   task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  task.arguments = [
+  var curlArgsStream = [
     apiEndpoint,
-    "--speed-limit", "0", "--speed-time", timeoutSeconds.toString(),
+    "--max-time", streamMaxSeconds(timeoutSeconds).toString(),
     "--silent", "--no-buffer",
-    "--header", "Content-Type: application/json",
-    "--header", `Authorization: Bearer ${apiKey}`,
-    "--data", JSON.stringify(chatPayload(model, messages, true, supportsThinkingParam)),
-    "--output", streamFile
+    "--header", "Content-Type: application/json"
   ]
+  if (apiKey) curlArgsStream.push("--header", "Authorization: Bearer " + apiKey)
+  curlArgsStream.push("--data", JSON.stringify(chatPayload(model, messages, true, supportsThinkingParam)))
+  curlArgsStream.push("--output", streamFile)
+  task.arguments = curlArgsStream
 
   task.standardOutput = stdout
   task.launchAndReturnError(false)
@@ -589,7 +964,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
 
   if (streamMarker) return JSON.stringify({
     rerun: 0.1,
-    variables: { streaming_now: true },
+    variables: { streaming_now: true, stream_marker: "0" },
     response: "…",
     behaviour: { response: "append" }
   })
@@ -605,6 +980,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
 
         return JSON.stringify({
           response: errorMessage,
+          variables: { streaming_now: "0", stream_marker: "0" },
           behaviour: { response: "replacelast" }
         })
       }
@@ -615,6 +991,7 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
 
       return JSON.stringify({
         response: streamString,
+        variables: { streaming_now: "0", stream_marker: "0" },
         behaviour: { response: "replacelast" }
       })
     }
@@ -633,7 +1010,8 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
   const finishReason = chunks.slice(-1)[0]?.["choices"]?.[0]?.["finish_reason"]
 
   if (!finishReason) {
-    const stalled = new Date().getTime() - fileModified(streamFile) > timeoutSeconds * 1000
+    const idleLimitMs = streamIdleSeconds(timeoutSeconds) * 1000
+    const stalled = new Date().getTime() - fileModified(streamFile) > idleLimitMs
 
     if (stalled) {
       if (responseText.length > 0) appendChat(chatFile, { role: "assistant", content: responseText })
@@ -641,9 +1019,11 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
       deleteFile(streamFile)
       deleteFile(pidStreamFile)
 
+      const session = readSession(chatFile)
       return JSON.stringify({
         response: `${demoteMarkdownHeadings(responseText)} [Connection Stalled]`,
-        footer: "You can ask the assistant to continue the answer",
+        footer: "流式连接中断，回复可能不完整；可输入「继续」让助手接着写",
+        variables: { streaming_now: "0", stream_marker: "0" },
         behaviour: { response: "replacelast", scroll: "end" }
       })
     }
@@ -655,26 +1035,30 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
 
     return JSON.stringify({
       rerun: 0.1,
-      variables: { streaming_now: true },
+      variables: { streaming_now: true, stream_marker: "0" },
       response: demoteMarkdownHeadings(responseText),
       behaviour: { response: "replacelast", scroll: "end" }
     })
   }
 
-  appendChat(chatFile, { role: "assistant", content: responseText })
+  const finalText = finishReason === "stop" ? withHangingPreambleFallback(responseText) : responseText
+  appendChat(chatFile, { role: "assistant", content: finalText })
   deleteFile(streamFile)
   deleteFile(pidStreamFile)
+  maybeTriggerBackgroundReview(chatFile)
+  maybeIndexSession()
 
   const footerText = (function() {
     switch (finishReason) {
-      case "length": return "Maximum number of tokens reached"
-      case "content_filter": return "Content was omitted due to content filters"
+      case "length": return "已达输出长度上限，可输入「继续」补全剩余内容"
+      case "content_filter": return "部分内容因安全策略被过滤"
     }
   })()
 
   return JSON.stringify({
-    response: demoteMarkdownHeadings(responseText),
+    response: demoteMarkdownHeadings(finalText),
     footer: footerText,
+    variables: { streaming_now: "0", stream_marker: "0" },
     behaviour: { response: "replacelast", scroll: "end" }
   })
 }
@@ -721,6 +1105,42 @@ function turnListText(messages) {
     const preview = message["content"].replace(/\s+/g, " ").slice(0, 48)
     return `${index + 1}. ${preview}${message["content"].length > 48 ? "…" : ""}`
   }).join("\n")
+}
+
+
+// --- /model command ---
+const VALID_MODELS = Object.freeze(["MiniMax-M3", "deepseek-v4-flash", "deepseek-v4-pro"])
+
+function handleModel(chatFile, typedQuery) {
+  const modelMatch = typedQuery.match(/^\/model(?:\s+(.*))?$/i)
+  if (!modelMatch) return null
+
+  const session = readSession(chatFile)
+  const newModel = (modelMatch[1] || "").trim()
+
+  if (!newModel || !VALID_MODELS.some(m => m.toLowerCase() === newModel.toLowerCase())) {
+    return JSON.stringify({
+      response: markdownSession(session, false),
+      footer: "Available: " + VALID_MODELS.join(" · ") + ". Usage: /model MiniMax-M3",
+      behaviour: { scroll: "end" }
+    })
+  }
+
+  const canonical = VALID_MODELS.find(m => m.toLowerCase() === newModel.toLowerCase())
+
+  if (canonical === "MiniMax-M3") {
+    Application("com.runningwithcrayons.Alfred").setConfiguration("minimax_model", { toValue: canonical, inWorkflow: envVar("alfred_workflow_bundleid") })
+    Application("com.runningwithcrayons.Alfred").setConfiguration("chat_provider", { toValue: "minimax", inWorkflow: envVar("alfred_workflow_bundleid") })
+  } else {
+    Application("com.runningwithcrayons.Alfred").setConfiguration("deepseek_model", { toValue: canonical, inWorkflow: envVar("alfred_workflow_bundleid") })
+    Application("com.runningwithcrayons.Alfred").setConfiguration("chat_provider", { toValue: "deepseek", inWorkflow: envVar("alfred_workflow_bundleid") })
+  }
+
+  return JSON.stringify({
+    response: markdownSession(session, false),
+    footer: "Model switched to " + canonical,
+    behaviour: { scroll: "end" }
+  })
 }
 
 function handleRename(chatFile, typedQuery) {
@@ -899,19 +1319,68 @@ function handleExport(chatFile, typedQuery) {
   return exportSessionToObsidian(chatFile, intent.customName)
 }
 
+function _pad2(n) { return n.toString().padStart(2, "0") }
+
+function ensureFreshChat(chatFile) {
+  // 当 env new_chat=1 时: 把当前 session 移到 archive,写空 chat.json。
+  // 减法版: 不依赖 plist 写文件节点,一处处理 cmd+回车 和 Add Context 两条路径。
+  if (envVar("new_chat") !== "1") return
+  // rename 关键字 → 最近对话 → 触发 new_chat trigger → 8296D113 强制覆盖 new_chat=1
+  // 此时 F87E8DE0 已经把所选 archive 移到 chat.json,这里再归档会把刚 load 的对话清空 → 空白。
+  if (envVar("replace_with_chat")) return
+  if (!fileExists(chatFile)) {
+    writeFile(chatFile, "[]")
+    return
+  }
+  let isEmpty = false
+  try {
+    const raw = $.NSString.stringWithContentsOfFileEncodingError(chatFile, $.NSUTF8StringEncoding, undefined).js
+    const current = JSON.parse(raw || "[]")
+    isEmpty = Array.isArray(current) ? current.length === 0 : (current.messages || []).length === 0
+  } catch {}
+  if (isEmpty) return
+  const dataDir = envVar("alfred_workflow_data")
+  const archiveDir = `${dataDir}/archive`
+  const now = new Date()
+  const ts = `${now.getFullYear()}.${_pad2(now.getMonth() + 1)}.${_pad2(now.getDate())}.${_pad2(now.getHours())}.${_pad2(now.getMinutes())}.${_pad2(now.getSeconds())}`
+  $.NSFileManager.defaultManager.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(archiveDir, true, undefined, undefined)
+  const uid = $.NSProcessInfo.processInfo.globallyUniqueString.js.split("-")[0]
+  const archived = `${archiveDir}/${ts}-${uid}.json`
+  try { $.NSFileManager.defaultManager.moveItemAtPathToPathError(chatFile, archived, undefined) } catch {}
+  writeFile(chatFile, "[]")
+}
+
 // Main
 function run(argv) {
+  // new_chat / replace_with_chat 都是一次性信号：runMain 顶部的 ensureFreshChat
+  // 已消费 new_chat 完成归档；F87E8DE0 已消费 replace_with_chat 完成 archive↔chat 切换。
+  // 这里在最终输出里把两者都清成 "0"/""，避免它们在 Text View 变量作用域里长期残留，
+  // 否则下次 Cmd+回车 会因为 replace_with_chat 残留而跳过归档，表现就是新会话没清空。
+  const out = runMain(argv)
+  try {
+    const parsed = JSON.parse(out)
+    parsed.variables = Object.assign({}, parsed.variables, {
+      new_chat: "0",
+      replace_with_chat: ""
+    })
+    return JSON.stringify(parsed)
+  } catch {
+    return out
+  }
+}
+
+function runMain(argv) {
   const typedQuery = argv[0]
   const maxContext = parseInt(envVar("max_context"))
   const timeoutSeconds = parseInt(envVar("timeout_seconds"))
-  const { providerName, apiKey, endpoint, model, supportsThinkingParam } = resolveProvider()
   const configuredSystemPrompt = envVar("system_prompt")
   const chatFile = `${envVar("alfred_workflow_data")}/chat.json`
-  const memoryFile = `${envVar("alfred_workflow_data")}/memory.json`
-  const systemPrompt = composeSystemPrompt(configuredSystemPrompt, memoryFile)
   const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
   const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
   const streamingNow = envVar("streaming_now") === "1"
+
+  ensureFreshChat(chatFile)
+
 
   if (streamingNow) return readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds)
 
@@ -924,10 +1393,15 @@ function run(argv) {
     behaviour: { scroll: "end" }
   })
 
+  if (typedQuery.length > 0) triggerCuratorTick()
+
   if (typedQuery.length === 0) return JSON.stringify({
     response: markdownSession(session, false),
     behaviour: { scroll: "end" }
   })
+
+  const modelResponse = handleModel(chatFile, typedQuery)
+  if (modelResponse) return modelResponse
 
   const renameResponse = handleRename(chatFile, typedQuery)
   if (renameResponse) return renameResponse
@@ -941,22 +1415,30 @@ function run(argv) {
   const localControlResponse = handleLocalFileControl(chatFile, typedQuery)
   if (localControlResponse) return localControlResponse
 
-  if (!apiKey || apiKey.length === 0) {
+  const provider = resolveProvider()
+  const systemPrompt = composeSystemPrompt(configuredSystemPrompt, typedQuery)
+
+  if (providerRequiresApiKey(provider) && (!provider.apiKey || provider.apiKey.length === 0)) {
     return JSON.stringify({
-      response: `**${providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
+      response: `**${provider.providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
       behaviour: { response: "replacelast", scroll: "end" }
     })
   }
 
-  const modelToolResponse = handleModelToolUse(chatFile, typedQuery, endpoint, apiKey, model, systemPrompt, timeoutSeconds)
+  const modelToolResponse = handleModelToolUse(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds)
   if (modelToolResponse) return modelToolResponse
 
   const appendQuery = { role: "user", content: typedQuery }
   const ongoingMessages = session.messages.concat(appendQuery)
   const contextChat = ongoingMessages.slice(-maxContext)
 
-  startStream(endpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, supportsThinkingParam)
   appendChat(chatFile, appendQuery)
+
+  if (provider.apiStyle === "anthropic") {
+    return runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextChat, timeoutSeconds)
+  }
+
+  startStream(provider.endpoint, provider.apiKey, provider.model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, provider.supportsThinkingParam)
 
   return JSON.stringify({
     rerun: 0.1,

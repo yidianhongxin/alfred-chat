@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add Cmd+3 hotkey to open the most recent Alfred Chat conversation."""
+"""Add Cmd+2 hotkey to open the most recent Alfred Chat conversation."""
 
 import plistlib
 import uuid
@@ -15,7 +15,7 @@ VIEW_CHAT_UID = "2345B220-18B0-4F70-9DD7-B7A20763FFBC"
 def make_hotkey_object():
     return {
         "config": {
-            "hotkey": 20,
+            "hotkey": 19,
             "hotmod": 1048576,
             "leftcursor": False,
             "donotshowmodhint": False,
@@ -89,7 +89,7 @@ def main():
     with PLIST_PATH.open("wb") as handle:
         plistlib.dump(data, handle, sort_keys=False)
 
-    print("Added Cmd+3 hotkey for recent chat")
+    print("Added Cmd+2 hotkey for recent chat")
 
 
 if __name__ == "__main__":

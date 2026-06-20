@@ -1,23 +1,25 @@
 # Alfred Chat
 
-Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构参考 [alfredapp/openai-workflow](https://github.com/alfredapp/openai-workflow)。
+Alfred 5 对话框聊天 Workflow，支持多 Provider 本地 Agent（文件 / Obsidian / 记忆 / 工具调用）。
 
 ## 安装
 
 1. 下载 [`Alfred Chat.alfredworkflow`](Alfred%20Chat.alfredworkflow) 并双击安装。
 2. 打开 Alfred Preferences → Workflows → **Alfred Chat** → **Configure**。
-3. 选择 **Provider**（MiniMax 或 DeepSeek），填入对应 API Key。
+3. 选择 **Provider**，填入对应 API Key。
 
 ## 切换模型
 
 在 **Alfred Preferences → Workflows → Alfred Chat → Configure** 里操作：
 
 1. **换服务商**：改 **Provider**
-   - `MiniMax` → 走 MiniMax API
-   - `DeepSeek` → 走 DeepSeek API
-2. **换具体模型**：改对应下拉框
-   - MiniMax：**MiniMax Model**（默认 `MiniMax-M3`）
-   - DeepSeek：**DeepSeek Model**（如 `deepseek-v4-flash`、`deepseek-v4-pro`）
+   - `MiniMax` → MiniMax API（默认）
+   - `DeepSeek` → DeepSeek API
+   - `OpenAI` → OpenAI / OpenRouter 等兼容端点
+   - `Anthropic` → Claude Messages API（非流式）
+   - `Ollama` → 本机 Ollama（无需 API Key）
+   - `Custom OpenAI` → 自定义 OpenAI 兼容端点
+2. **换具体模型**：改对应 Provider 下的 Model 字段
 3. **MiniMax 国内/国际**：改 **MiniMax Region**（国内 Key 通常选 `China`）
 
 改完保存即可，下次 `chat` 提问立即生效。建议切换后按 **⌘↩** 开新对话，避免旧上下文混淆。
@@ -27,20 +29,43 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 | 选项 | 说明 |
 |------|------|
 | **Chat Keyword** | 触发关键词，默认 `chat` |
-| **Provider** | `MiniMax` / `DeepSeek` |
+| **Provider** | `MiniMax` / `DeepSeek` / `OpenAI` / `Anthropic` / `Ollama` / `Custom OpenAI` |
+| **OpenAI API Key** | [platform.openai.com](https://platform.openai.com/api-keys) 或 OpenRouter 等 |
+| **OpenAI Base URL** | 默认 `https://api.openai.com/v1` |
+| **OpenAI Model** | 默认 `gpt-4o` |
+| **Anthropic API Key** | [console.anthropic.com](https://console.anthropic.com/) |
+| **Anthropic Model** | 默认 `claude-sonnet-4-20250514` |
 | **DeepSeek API Key** | [platform.deepseek.com](https://platform.deepseek.com/api_keys) |
 | **DeepSeek Model** | 默认 `deepseek-v4-flash` |
 | **MiniMax API Key** | [platform.minimax.io](https://platform.minimax.io/user-center/basic-information/interface-key) |
 | **MiniMax Region** | 默认国内 `api.minimaxi.com`；国际 Key 改选 International |
 | **MiniMax Model** | 默认 `MiniMax-M3` |
+| **Ollama Base URL** | 默认 `http://localhost:11434/v1` |
+| **Ollama Model** | 默认 `llama3.2` |
+| **Custom OpenAI** | 自定义 Base URL / API Key / Model |
 | **Keep History** | 新对话时归档当前会话 |
 | **Context** | 发送给 API 的最近消息条数 |
+| **Memory Nudge Interval** | 每 N 轮用户消息后触发后台记忆审阅（默认 10） |
+| **Auto Memory Review** | 是否允许后台自动写入 MEMORY.md / USER.md |
+| **Max Tool Iterations** | 模型驱动工具调用最多迭代次数（默认 5） |
+| **Enabled Toolsets** | 工具集白名单：`all` / `read_only` / 逗号分隔（如 `file,obsidian,memory`） |
+| **Context File Path** | 可选项目上下文文件（默认读 vault 根 `AGENTS.md`） |
+| **Soul File Path** | Agent 灵魂文件（默认 `memories/SOUL.md`，类似 Hermes SOUL） |
 | **Timeout** | 流式连接超时（秒） |
 | **Your Name** | 对话里你的称呼，默认 `You` |
 | **Assistant Name** | 对话里 AI 的称呼，默认 `Assistant` |
-| **Obsidian Vault Path** | OB 库根目录，供 `/export` 使用 |
+| **Obsidian Vault Path** | OB 库根目录，供 `/export` 与 OB 工具使用 |
 | **Obsidian Export Folder** | 导出子文件夹，默认 `0.inbox` |
 | **System Prompt** | 系统提示词 |
+
+### Provider 说明
+
+| Provider | 流式回复 | API Key |
+|----------|----------|---------|
+| MiniMax / DeepSeek / OpenAI / Ollama / Custom OpenAI | 支持 | 除 Ollama 外必填 |
+| Anthropic (Claude) | 非流式（一次性返回） | 必填 |
+
+Anthropic 通过 `provider_bridge.py` 调用 Claude Messages API，与 OpenAI 兼容端点分开处理。
 
 ### 对话排版说明
 
@@ -60,7 +85,7 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 ### 触发方式
 
 - 关键词：`chat 你的问题`
-- 快捷键：**⌘3** — 打开最近一次对话（当前会话优先，否则加载最新归档）
+- 快捷键：**⌘2** — 打开最近一次对话（当前会话优先，否则加载最新归档）
 - Universal Action：**Ask AI**
 - Fallback Search：**Ask AI '{query}'**
 
@@ -68,8 +93,8 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 
 | 快捷键 | 功能 |
 |--------|------|
-| ↩ | 发送新问题 |
-| ⌘↩ | 新对话（可选归档当前会话） |
+| ↩ | 发送新问题（继续当前会话） |
+| ⌘↩ | 新对话：归档当前会话后发送（keyword 输入框与对话框内均可用） |
 | ⌥↩ | 复制最后回答 |
 | ⌃↩ | 复制全文 |
 | ⇧↩ | 停止生成 |
@@ -139,6 +164,12 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 - `把桌面所有txt移动到 Desktop/txt归档`
 - `读取123.txt`
 - `搜索OB哮喘`
+- `你能读到OB库的内容么？`
+- `翻阅一下OB库里的日记`
+- `读下最近2天日记`
+- `列出0.inbox里的文章`
+- `读取OB 10.DL日记/2026-06-17.md`
+- `写入OB 0.inbox/test.md 内容：hello`
 - `读下ob库今日日记`
 - `今天日记 内容：今天完成 Alfred Chat 升级`
 - `新增任务：整理桌面`
@@ -150,6 +181,8 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 - `记住 资料库 是 /Users/DRLer/Obsidian_250614/3.wiki资料`
 - `你记住以下内容：OB 指 Obsidian；CC 指 Claude Code`
 - `列出记忆`
+- `查看灵魂` / `设定灵魂 内容：...`（写入 `memories/SOUL.md`）
+- `搜索对话 人均寿命` / `上次讨论过中国人均寿命吗`
 - `运行命令：ls Desktop`
 - `撤销上一步`
 
@@ -163,8 +196,13 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 - 批量移动会先展示计划，确认后执行
 - 每次写入/追加/替换/删除/批量移动会写操作日志，支持 `撤销上一步`
 - Shell 仅允许白名单命令：`ls`、`pwd`、`mkdir`
+- **OB 读写**：支持读取库状态、翻阅日记、读取最近日记、读写库内 Markdown 文件
 - **提醒事项**：支持自然语言时间，写入系统「提醒事项」App（首次使用需授权）
-- `memory.json` 会自动注入后续 AI 请求，模型会带着长期记忆回答
+- **长期记忆**（Hermes 风格）：`memories/MEMORY.md`（笔记）+ `memories/USER.md`（用户画像），`§` 分隔条目；自动从旧 `memory.json` 迁移
+- **Agent 灵魂**（Hermes SOUL）：`memories/SOUL.md` 定义身份、性格与边界；首次使用自动按 **Assistant Name** 生成模板
+- 每 N 轮对话后台 **自生长审阅**，可自动写入 `[auto]` 标记条目
+- **会话检索**：`state.db` FTS 索引当前与归档对话
+- `memories/MEMORY.md` 与 `USER.md` 会自动注入后续 AI 请求
 
 ### 模型驱动 Tool Use
 
@@ -172,7 +210,8 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 
 - `帮我总结今日日记` → 模型选择 `obsidian_daily_read` → 读取本地 OB 日记 → 再由模型总结
 - `帮我看看桌面123.txt写了什么` → 模型选择 `read_file`
-- `把这个偏好记住：OB 就是 Obsidian` → 模型选择 `memory_append`
+- `把这个偏好记住：OB 就是 Obsidian` → 模型选择 `memory` add 或 `memory_append`
+- `上次讨论过 X 吗` → `session_search`
 
 ### 聊天历史
 
@@ -189,25 +228,34 @@ Alfred 5 对话框聊天 Workflow，支持 **DeepSeek** 与 **MiniMax**，架构
 
 | Provider | Endpoint | 默认模型 |
 |----------|----------|----------|
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o` |
+| Anthropic | `https://api.anthropic.com/v1/messages` | `claude-sonnet-4-20250514` |
 | DeepSeek | `https://api.deepseek.com/chat/completions` | `deepseek-v4-flash` |
 | MiniMax 国际 | `https://api.minimax.io/v1/chat/completions` | `MiniMax-M3` |
 | MiniMax 国内 | `https://api.minimaxi.com/v1/chat/completions` | `MiniMax-M3` |
+| Ollama | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
 
-文档：[DeepSeek API](https://api-docs.deepseek.com/) · [MiniMax OpenAI API](https://platform.minimax.io/docs/api-reference/text-openai-api)
+文档：[OpenAI API](https://platform.openai.com/docs/api-reference/chat) · [Anthropic API](https://docs.anthropic.com/) · [DeepSeek API](https://api-docs.deepseek.com/) · [MiniMax OpenAI API](https://platform.minimax.io/docs/api-reference/text-openai-api)
 
 ## 开发
 
 ```bash
-# 从参考仓库改造后重新打包
+# 从源码重新打包
 cd Workflow && zip -r "../Alfred Chat.alfredworkflow" .
 ```
 
 源码结构：
 
-- `Workflow/chat` — 主 JXA 脚本（流式 API 调用）
+- `Workflow/chat` — 主 JXA 脚本（流式 API、工具路由、Provider 解析）
 - `Workflow/local_agent.py` — 本地文件 Agent（工具解析、权限、执行）
+- `Workflow/provider_bridge.py` — Anthropic 等非 OpenAI 兼容 API 桥接
+- `Workflow/agent_tools/` — 工具注册表（15 个已注册工具）
+- `Workflow/agent_providers/` — Provider Python 模块（供 bridge 调用）
+- `Workflow/memory_store.py` / `soul_store.py` — 长期记忆与灵魂
+- `Workflow/session_index.py` / `background_review.py` — 会话检索与后台审阅
+- `Workflow/agent_skills/` — 技能检索与 skillify
 - `Workflow/info.plist` — Workflow 对象与配置
-- `scripts/transform_plist.py` — 从 openai-workflow 迁移用的 plist 转换脚本
+- `scripts/test_*.py` — 本地测试脚本
 
 ## 致谢
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -20,11 +21,23 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
+WORKFLOW_DIR = Path(__file__).resolve().parent
+if str(WORKFLOW_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKFLOW_DIR))
+
 HOME = Path("/Users/DRLer").resolve()
 DESKTOP = HOME / "Desktop"
 DEFAULT_OBSIDIAN = HOME / "Obsidian_250614"
 MAX_READ_CHARS = 6000
 MAX_LIST_ITEMS = 40
+MAX_PATH_CHARS = 512
+
+SKILLIFY_RE = re.compile(
+    r"(?:^/skillify\b|"
+    r"(?:生成|创建|提炼|固化|写成|整理成|做成|转成|转化为).*(?:skill|skills|Skill|技能)|"
+    r"(?:skill|skills|Skill|技能).*(?:生成|创建|提炼|固化|写成|整理成|做成))",
+    re.I,
+)
 
 
 @dataclass
@@ -40,12 +53,14 @@ class Action:
     command: str = ""
     task_text: str = ""
     task_id: int = 0
+    count: int = 0
     reminder_title: str = ""
     reminder_due_iso: str = ""
     reminder_list: str = ""
     key: str = ""
     value: str = ""
     note: str = ""
+    memory_target: str = "user"
 
 
 def json_result(**kwargs: Any) -> None:
@@ -78,6 +93,31 @@ def tasks_path() -> Path:
 
 def memory_path() -> Path:
     return data_dir() / "memory.json"
+
+
+def memories_dir() -> Path:
+    path = data_dir() / "memories"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resolve_allowed_toolsets():
+    """读 enabled_toolsets 环境变量,返回 set 或 None(=全启用)。
+
+    支持预设:all / read_only / 逗号分隔的 toolset 名。
+    """
+    raw = os.environ.get("enabled_toolsets", "").strip()
+    if not raw or raw == "all":
+        return None
+    if raw == "read_only":
+        return {"file", "obsidian", "memory", "search", "task"}  # read-only filter is loose; specific filtering in handler
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def get_memory_store():
+    from memory_store import MemoryStore
+
+    return MemoryStore(data_dir())
 
 
 def save_pending(action: Action) -> None:
@@ -143,8 +183,33 @@ def allowed(path: Path) -> bool:
     return path == HOME or HOME in path.parents
 
 
+def looks_like_skillify_request(text: str) -> bool:
+    return bool(SKILLIFY_RE.search((text or "").strip()))
+
+
+def is_plausible_path(candidate: str) -> bool:
+    text = (candidate or "").strip()
+    if not text or len(text) > MAX_PATH_CHARS:
+        return False
+    if "\n" in text or "\r" in text:
+        return False
+    if re.search(r"\s{2,}", text):
+        return False
+    if len(text) > 120 and "/" not in text and "\\" not in text:
+        return False
+    return True
+
+
+def obsidian_path_error(candidate: str) -> Optional[str]:
+    if is_plausible_path(candidate):
+        return None
+    return "路径无效：请提供 OB 内相对路径（如 0.wiki资料/概念名.md），不要把整段正文当路径"
+
+
 def has_path_hint(candidate: str) -> bool:
     text = candidate.strip()
+    if not is_plausible_path(text):
+        return False
     if re.search(r"(如何|怎么|为什么|方法|教程|吗|？|\?)", text):
         return False
     return bool(
@@ -152,6 +217,38 @@ def has_path_hint(candidate: str) -> bool:
         or re.search(r"(^|[\s/\\])\.env($|\s)", text, re.I)
         or re.search(r"\.[A-Za-z0-9]{1,8}$", text)
     )
+
+
+def strip_target_path_noise(raw: str) -> str:
+    text = raw.strip().strip("\"'").removeprefix("@").strip()
+    text = re.sub(r"^(?:一篇|一个|一份|到)\s*", "", text)
+    text = re.sub(r"^\./", "", text)
+    return text.strip()
+
+
+def looks_like_obsidian_relative_path(raw: str) -> bool:
+    text = strip_target_path_noise(raw)
+    if not text or not is_plausible_path(text):
+        return False
+    if text.startswith(str(HOME)) or text.startswith("/Users"):
+        return False
+    if re.search(r"(?:^|[/\\])(?:0\.inbox|10\.DL日记)(?:[/\\]|$)", text, re.I):
+        return True
+    if re.match(r"^\d+\.[\w\u4e00-\u9fa5]", text):
+        return True
+    if re.match(r"^(?:OB|Obsidian)/", text, re.I):
+        return True
+    root = obsidian_root()
+    vault = root.name
+    if text == vault or text.startswith(f"{vault}/") or f"/{vault}/" in text:
+        return True
+    if text.startswith("/"):
+        try:
+            Path(text).resolve().relative_to(root)
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 def format_paths(paths: Iterable[Path], base: Optional[Path] = None) -> str:
@@ -212,7 +309,7 @@ def looks_like_local_file_command(text: str) -> bool:
         or re.search(r"(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)(?:到)?桌面", text, re.I)
         or re.search(rf"(创建|新建|写入|追加|附加|替换|删除|移除|读取|查看).*{file_hint}", text, re.I)
         or re.search(rf"{file_hint}.*(内容|正文)[:：]", text, re.I)
-        or re.search(r"^(列出|新增|完成)任务|^(你)?记住|^列出记忆|搜索(?:OB|Obsidian|ob)|(?:今天|今日)日记|(?:读|读取|查看).*(?:OB|Obsidian|ob).*(?:今天|今日)日记|运行命令[:：]|提醒", text, re.I)
+        or re.search(r"^(列出|新增|完成)任务|^(你)?记住|^列出记忆|(?:查看|列出|读取|显示)?灵魂|(?:写入|更新|设定|追加)灵魂|搜索(?:OB|Obsidian|ob)|(?:OB|Obsidian|ob)库|(?:0\.inbox|inbox).*(?:文章|文件|笔记)|(?:今天|今日)日记|(?:近|最近)\s*\d*\s*(?:天|篇)?日记|(?:翻阅|回顾|随便读|随机读).*(?:日记|OB|Obsidian|ob)|(?:读|读取|查看).*(?:OB|Obsidian|ob).*(?:今天|今日)日记|运行命令[:：]|提醒", text, re.I)
     )
 
 
@@ -304,6 +401,41 @@ def parse_reminder_intent(text: str) -> Optional[Action]:
     return None
 
 
+def parse_small_count(raw: str, default: int = 3) -> int:
+    if not raw:
+        return default
+    raw = raw.strip()
+    digits = re.search(r"\d+", raw)
+    if digits:
+        return max(1, min(int(digits.group(0)), 20))
+    chinese_numbers = {
+        "一": 1,
+        "两": 2,
+        "二": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }
+    return chinese_numbers.get(raw, default)
+
+
+def parse_obsidian_list_path(text: str) -> Optional[str]:
+    if not re.search(r"(?:列出|查看)", text) or not re.search(r"(?:文章|文件|笔记)", text):
+        return None
+    if not re.search(r"(?:OB|Obsidian|ob|0\.inbox|inbox|/)", text, re.I):
+        return None
+
+    cleaned = re.sub(r"^(?:列出|查看)\s*(?:OB|Obsidian|ob)?(?:库)?\s*", "", text, flags=re.I)
+    cleaned = re.sub(r"(?:里的|里|下|中|中的)?(?:所有)?(?:文章|文件|笔记)$", "", cleaned, flags=re.I)
+    cleaned = cleaned.strip()
+    return cleaned or "0.inbox"
+
+
 def applescript_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -375,6 +507,9 @@ def parse_intent(query: str) -> Optional[Action]:
     if re.match(r"^(撤销上一步|undo last)$", text, re.I):
         return Action("undo")
 
+    if looks_like_skillify_request(text):
+        return Action("skillify", note=text)
+
     match = re.match(r"^列出任务$", text)
     if match:
         return Action("task_list")
@@ -394,6 +529,64 @@ def parse_intent(query: str) -> Optional[Action]:
         return Action("memory_set", key=match.group(1).strip(" “”\"'"), value=match.group(2).strip())
     if re.match(r"^列出记忆$", text):
         return Action("memory_list")
+
+    if re.match(r"^(?:查看|列出|读取|显示)?灵魂$", text, re.I):
+        return Action("soul_read")
+    match = re.match(r"^(?:写入|更新|设定)灵魂\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
+    if match:
+        return Action("soul_write", content=match.group(1).strip())
+    match = re.match(r"^追加灵魂\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
+    if match:
+        return Action("soul_append", content=match.group(1).strip())
+
+    match = re.match(r"^(?:搜索|查找)(?:对话|聊天记录|历史)[:：]?\s*(.+)$", text, re.I)
+    if match:
+        return Action("session_search", term=match.group(1).strip())
+    match = re.search(r"(?:上次|之前|earlier).*(?:讨论|聊|说过|提到).*(.+?)(?:吗|？|\?|$)", text, re.I)
+    if match:
+        return Action("session_search", term=match.group(1).strip("「」\"' "))
+
+    if re.search(r"(?:能|可以).*(?:读|读取|访问|打开).*(?:OB|Obsidian|ob)库", text, re.I) or re.search(r"(?:OB|Obsidian|ob)库.*(?:能读|能访问|状态)", text, re.I):
+        return Action("obsidian_status")
+
+    match = re.search(r"(?:读|读取|查看|翻阅|回顾|总结).*(?:近|最近)\s*([一二两三四五六七八九十\d]+)?\s*(?:天|篇)?日记", text, re.I)
+    if match:
+        return Action("obsidian_diary_recent", count=parse_small_count(match.group(1), default=7))
+
+    if re.search(r"(?:翻阅|回顾|随便读|随机读|看看以前).*(?:日记|OB|Obsidian|ob)", text, re.I):
+        return Action("obsidian_diary_browse", count=1 if "随机" not in text else -1)
+
+    match = re.match(r"^(?:写入|新建|创建)(?:到)?(?:OB|Obsidian|ob)(?:库)?\s+(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
+    if match:
+        return Action("obsidian_write", path=match.group(1).strip(), content=match.group(2))
+
+    match = re.match(
+        r"^(?:写入|新建|创建)(?:一篇|一个|一份|到)?(?:文件)?\s*(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$",
+        text,
+        re.I,
+    )
+    if match:
+        path = strip_target_path_noise(match.group(1))
+        if looks_like_obsidian_relative_path(path):
+            return Action("obsidian_write", path=path, content=match.group(2))
+
+    match = re.match(r"^(?:写入|新建|创建)(?:一篇|一个|一份|到)?(?:文件)?\s*(.+)$", text, re.I)
+    if match:
+        path = strip_target_path_noise(match.group(1))
+        if looks_like_obsidian_relative_path(path) and has_path_hint(path):
+            return Action("obsidian_write", path=path, content="")
+
+    match = re.match(r"^(?:追加|附加)(?:到)?(?:OB|Obsidian|ob)(?:库)?\s+(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
+    if match:
+        return Action("obsidian_append", path=match.group(1).strip(), content=match.group(2))
+
+    obsidian_list_path = parse_obsidian_list_path(text)
+    if obsidian_list_path:
+        return Action("obsidian_list", path=obsidian_list_path)
+
+    match = re.match(r"^(?:读|读取|查看|打开)(?:OB|Obsidian|ob)(?:库)?\s+(.+)$", text, re.I)
+    if match:
+        return Action("obsidian_read", path=match.group(1).strip())
 
     reminder = parse_reminder_intent(text)
     if reminder:
@@ -435,9 +628,12 @@ def parse_intent(query: str) -> Optional[Action]:
     if match and re.search(r"[/\\.]|桌面", match.group(1)):
         return Action("write", match.group(1).strip(), content=match.group(2))
 
-    match = re.match(r"^(?:创建|新建|写入)(?:文件)?\s*(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
+    match = re.match(r"^(?:创建|新建|写入)(?:一篇|一个|一份|到)?(?:文件)?\s*(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
     if match and has_path_hint(match.group(1)):
-        return Action("write", match.group(1).strip(), content=match.group(2))
+        path = strip_target_path_noise(match.group(1))
+        if looks_like_obsidian_relative_path(path):
+            return Action("obsidian_write", path=path, content=match.group(2))
+        return Action("write", path, content=match.group(2))
 
     match = re.match(r"^(?:追加|附加)(?:到文件)?\s*(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
     if match and has_path_hint(match.group(1)):
@@ -459,9 +655,12 @@ def parse_intent(query: str) -> Optional[Action]:
     if match:
         return Action("write", f"Desktop/{match.group(1).strip()}")
 
-    match = re.match(r"^(?:新建|创建|写入)(?:文件)?\s*(.+)$", text, re.I)
+    match = re.match(r"^(?:新建|创建|写入)(?:一篇|一个|一份|到)?(?:文件)?\s*(.+)$", text, re.I)
     if match and has_path_hint(match.group(1)):
-        return Action("write", match.group(1).strip())
+        path = strip_target_path_noise(match.group(1))
+        if looks_like_obsidian_relative_path(path):
+            return Action("obsidian_write", path=path, content="")
+        return Action("write", path)
 
     return None
 
@@ -569,6 +768,72 @@ def obsidian_root() -> Path:
     return Path(os.environ.get("obsidian_vault_path") or DEFAULT_OBSIDIAN).resolve()
 
 
+def obsidian_allowed(path: Path, root: Path) -> bool:
+    return allowed(path) and (path == root or root in path.parents)
+
+
+def resolve_obsidian_path(raw: str, root: Path) -> Path:
+    text = strip_target_path_noise(raw)
+    if text.startswith(str(root)):
+        return Path(text).resolve()
+    if text.startswith("/"):
+        return Path(text).resolve()
+    return (root / text.lstrip("/")).resolve()
+
+
+def diary_date_key(path: Path) -> Tuple[str, float, str]:
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", path.stem)
+    date = match.group(1) if match else ""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0
+    return date, mtime, str(path)
+
+
+def diary_files(root: Path) -> List[Path]:
+    common_roots = [
+        root / "10.DL日记",
+        root / "日记",
+        root / "Daily",
+        root / "daily",
+        root,
+    ]
+    seen = set()
+    result: List[Path] = []
+    for diary_root in common_roots:
+        if not diary_root.exists():
+            continue
+        for path in diary_root.rglob("*.md"):
+            if path in seen:
+                continue
+            if re.match(r"\d{4}-\d{2}-\d{2}(?:-\d+)?$", path.stem):
+                seen.add(path)
+                result.append(path)
+    return sorted(result, key=diary_date_key, reverse=True)
+
+
+def read_markdown_excerpt(path: Path, max_chars: int = MAX_READ_CHARS) -> str:
+    content = path.read_text(encoding="utf-8")
+    excerpt = content[:max_chars]
+    if len(content) > max_chars:
+        excerpt += "\n\n[内容过长，已截断]"
+    return excerpt
+
+
+def execute_obsidian_status() -> Tuple[str, str, str]:
+    root = obsidian_root()
+    if not obsidian_allowed(root, root):
+        return "error", f"Obsidian 库超出允许范围：{root}", "OB 库不在允许范围"
+    if not root.exists():
+        return "error", f"Obsidian 库不存在：{root}", "OB 库不存在"
+    note_count = sum(1 for _ in root.rglob("*.md"))
+    diaries = diary_files(root)
+    latest = diaries[0].relative_to(root) if diaries else "未找到日记"
+    body = f"能读到 OB 库：{root}\n\n- Markdown 笔记：{note_count} 篇\n- 日记：{len(diaries)} 篇日记\n- 最新日记：{latest}\n\n你可以说：`翻阅一下日记`、`读下最近7天日记`、`写入OB 0.inbox/test.md 内容：...`。"
+    return "success", body, "OB 库可读取"
+
+
 def execute_obsidian_search(action: Action) -> Tuple[str, str, str]:
     root = obsidian_root()
     if not allowed(root):
@@ -587,6 +852,96 @@ def execute_obsidian_search(action: Action) -> Tuple[str, str, str]:
         if term in path.name or term in text:
             matches.append(path)
     return "success", f"OB 中关于「{term}」的笔记：\n\n{format_paths(matches, root)}", f"找到 {len(matches)} 条 OB 匹配"
+
+
+def execute_obsidian_read(action: Action) -> Tuple[str, str, str]:
+    root = obsidian_root()
+    target = resolve_obsidian_path(action.path, root)
+    if not obsidian_allowed(target, root):
+        return "error", "只允许读取 OB 库内文件", "读取失败"
+    if not target.exists() or not target.is_file():
+        return "error", f"OB 文件不存在：{target.relative_to(root) if root in target.parents else target}", "读取失败"
+    try:
+        excerpt = read_markdown_excerpt(target)
+    except UnicodeDecodeError:
+        return "error", f"无法读取二进制文件：{target}", "读取失败"
+    return "success", f"OB 文件 {target.relative_to(root)}：\n\n```text\n{excerpt}\n```", f"已读取 OB：{target.name}"
+
+
+def execute_obsidian_list(action: Action) -> Tuple[str, str, str]:
+    root = obsidian_root()
+    target = resolve_obsidian_path(action.path or "0.inbox", root)
+    if not obsidian_allowed(target, root):
+        return "error", "只允许列出 OB 库内目录", "列出失败"
+    if not target.exists() or not target.is_dir():
+        return "error", f"OB 目录不存在：{target.relative_to(root) if root in target.parents else target}", "列出失败"
+
+    files = sorted(
+        [path for path in target.iterdir() if path.is_file() and path.suffix.lower() == ".md"],
+        key=lambda path: path.name.lower(),
+    )
+    rows = []
+    for index, path in enumerate(files[:MAX_LIST_ITEMS], start=1):
+        rel = path.relative_to(root)
+        rows.append(f"{index}. {rel}")
+
+    omitted = len(files) - len(rows)
+    suffix = f"\n\n[还有 {omitted} 篇未显示]" if omitted > 0 else ""
+    body = f"{target.relative_to(root)} 里文章：{len(files)} 篇\n\n" + ("\n".join(rows) if rows else "未找到 .md 文章") + suffix
+    return "success", body, f"{target.relative_to(root)}：{len(files)} 篇"
+
+
+def execute_obsidian_write(action: Action, append: bool = False) -> Tuple[str, str, str]:
+    path_err = obsidian_path_error(action.path)
+    if path_err:
+        return "error", path_err, "写入失败"
+    root = obsidian_root()
+    target = resolve_obsidian_path(action.path, root)
+    if target.suffix == "":
+        target = target.with_suffix(".md")
+    if not obsidian_allowed(target, root):
+        return "error", "只允许写入 OB 库内文件", "写入失败"
+    before = snapshot_file(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if append and target.exists():
+        original = target.read_text(encoding="utf-8")
+        target.write_text(f"{original.rstrip()}\n\n{action.content}\n", encoding="utf-8")
+    else:
+        target.write_text(action.content, encoding="utf-8")
+    log_action(action, target, before)
+    verb = "追加到" if append else "写入"
+    return "success", f"已{verb} OB：{target.relative_to(root)}", f"已{verb} OB"
+
+
+def execute_diary_browse(action: Action) -> Tuple[str, str, str]:
+    root = obsidian_root()
+    if not obsidian_allowed(root, root):
+        return "error", f"Obsidian 库超出允许范围：{root}", "OB 库不在允许范围"
+    if not root.exists():
+        return "error", f"Obsidian 库不存在：{root}", "OB 库不存在"
+    diaries = diary_files(root)
+    if not diaries:
+        return "error", f"未找到日记。已搜索 {root}", "未找到日记"
+    target = random.choice(diaries) if action.count < 0 else diaries[0]
+    excerpt = read_markdown_excerpt(target)
+    return "success", f"翻到这篇日记：{target.relative_to(root)}\n\n```text\n{excerpt}\n```", f"已翻阅日记：{target.name}"
+
+
+def execute_diary_recent(action: Action) -> Tuple[str, str, str]:
+    root = obsidian_root()
+    if not obsidian_allowed(root, root):
+        return "error", f"Obsidian 库超出允许范围：{root}", "OB 库不在允许范围"
+    if not root.exists():
+        return "error", f"Obsidian 库不存在：{root}", "OB 库不存在"
+    count = action.count or 7
+    diaries = diary_files(root)[:count]
+    if not diaries:
+        return "error", f"未找到日记。已搜索 {root}", "未找到日记"
+    sections = []
+    per_file_limit = max(800, MAX_READ_CHARS // max(1, len(diaries)))
+    for path in diaries:
+        sections.append(f"## {path.relative_to(root)}\n\n```text\n{read_markdown_excerpt(path, per_file_limit)}\n```")
+    return "success", f"最近 {len(diaries)} 篇日记：\n\n" + "\n\n".join(sections), f"已读取 {len(diaries)} 篇日记"
 
 
 def execute_daily_append(action: Action) -> Tuple[str, str, str]:
@@ -655,30 +1010,44 @@ def execute_task(action: Action) -> Tuple[str, str, str]:
 
 
 def execute_memory(action: Action) -> Tuple[str, str, str]:
-    memory = load_json(memory_path(), {})
+    store = get_memory_store()
+    target = (action.memory_target or action.key or "user").strip().lower()
+    if target in {"memory", "mem", "notes"}:
+        target = "memory"
+    elif target in {"user", "profile"}:
+        target = "user"
+    else:
+        target = "user"
+
+    if action.type == "memory_add":
+        ok, message = store.add(target, action.note or action.content, auto=action.value == "auto")
+        status = "success" if ok else "error"
+        return status, message, message
+
+    if action.type == "memory_replace":
+        ok, message = store.replace(target, action.old_text, action.new_text or action.content)
+        status = "success" if ok else "error"
+        return status, message, message
+
+    if action.type == "memory_remove":
+        ok, message = store.remove(target, action.old_text or action.note)
+        status = "success" if ok else "error"
+        return status, message, message
+
     if action.type == "memory_append":
-        notes = memory.get("_notes", [])
-        if not isinstance(notes, list):
-            notes = []
-        notes.append({
-            "time": datetime.now().isoformat(timespec="seconds"),
-            "content": action.note,
-        })
-        memory["_notes"] = notes[-20:]
-        save_json(memory_path(), memory)
-        return "success", "已写入长期记忆", "已写入长期记忆"
+        ok, message = store.add("memory", action.note)
+        status = "success" if ok else "error"
+        return status, message if ok else message, "已写入长期记忆" if ok else message
+
     if action.type == "memory_set":
-        memory[action.key] = action.value
-        save_json(memory_path(), memory)
-        return "success", f"已记住：{action.key} = {action.value}", "已记住"
-    lines = []
-    for key, value in sorted(memory.items()):
-        if key == "_notes":
-            continue
-        lines.append(f"- {key}: {value}")
-    for item in memory.get("_notes", []):
-        lines.append(f"- {item.get('time', '')}: {item.get('content', '')[:120]}")
-    return "success", "记忆：\n\n" + ("\n".join(lines) if lines else "暂无记忆"), f"{len(memory)} 条记忆"
+        entry = f"{action.key}: {action.value}".strip(": ").strip()
+        ok, message = store.add("user", entry)
+        status = "success" if ok else "error"
+        return status, message if ok else message, f"已记住：{action.key}" if ok else message
+
+    body = store.list_formatted()
+    entry_count = sum(len(store.load_entries(t)) for t in ("user", "memory"))
+    return "success", f"记忆：\n\n{body}" if body else "记忆：\n\n暂无记忆", f"{entry_count} 条记忆"
 
 
 def execute_shell(action: Action) -> Tuple[str, str, str]:
@@ -704,6 +1073,50 @@ def execute_shell(action: Action) -> Tuple[str, str, str]:
     return "success", f"命令输出：\n\n```text\n{output or 'done'}\n```", "命令已完成"
 
 
+def execute_session_search(action: Action) -> Tuple[str, str, str]:
+    from session_index import format_search_results, search_sessions
+
+    term = action.term.strip()
+    if not term:
+        return "error", "请提供搜索关键词", "搜索失败"
+    results = search_sessions(term)
+    body = format_search_results(term, results)
+    return "success", body, f"找到 {len(results)} 条"
+
+
+def soul_override() -> Optional[str]:
+    value = os.environ.get("soul_file_path", "").strip()
+    return value or None
+
+
+def execute_soul(action: Action) -> Tuple[str, str, str]:
+    from soul_store import ensure_soul, read_soul, soul_path, write_soul
+
+    override = soul_override()
+    root = data_dir()
+    assistant = os.environ.get("chat_assistant_label") or "Assistant"
+    ensure_soul(root, assistant, override)
+
+    if action.type == "soul_read":
+        content = read_soul(root, override)
+        path = soul_path(root, override)
+        if not content:
+            return "success", "灵魂文件为空，可以说「设定灵魂 内容：...」来写入。", "灵魂为空"
+        return "success", f"灵魂（{path}）：\n\n```markdown\n{content}\n```", "已读取灵魂"
+
+    if action.type == "soul_write":
+        ok, message = write_soul(root, action.content, append=False, override=override)
+        status = "success" if ok else "error"
+        return status, message, message
+
+    if action.type == "soul_append":
+        ok, message = write_soul(root, action.content, append=True, override=override)
+        status = "success" if ok else "error"
+        return status, message, message
+
+    return "error", "未知灵魂操作", "灵魂操作失败"
+
+
 def execute_undo() -> Tuple[str, str, str]:
     record = read_last_log()
     if not record:
@@ -714,7 +1127,7 @@ def execute_undo() -> Tuple[str, str, str]:
         return "error", "日志记录路径不在允许范围，拒绝撤销", "撤销失败"
     before = record.get("before") or {}
     extra = record.get("extra") or {}
-    if action.type in {"write", "append", "replace", "obsidian_daily_append"}:
+    if action.type in {"write", "append", "replace", "obsidian_daily_append", "obsidian_write", "obsidian_append"}:
         if before.get("exists") and not before.get("binary"):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(before.get("content", ""), encoding="utf-8")
@@ -747,16 +1160,34 @@ def execute(action: Action, confirmed: bool = False) -> Tuple[str, str, str]:
         return execute_read(action)
     if action.type == "obsidian_search":
         return execute_obsidian_search(action)
+    if action.type == "obsidian_status":
+        return execute_obsidian_status()
+    if action.type == "obsidian_read":
+        return execute_obsidian_read(action)
+    if action.type == "obsidian_list":
+        return execute_obsidian_list(action)
+    if action.type == "obsidian_write":
+        return execute_obsidian_write(action, append=False)
+    if action.type == "obsidian_append":
+        return execute_obsidian_write(action, append=True)
+    if action.type == "obsidian_diary_browse":
+        return execute_diary_browse(action)
+    if action.type == "obsidian_diary_recent":
+        return execute_diary_recent(action)
     if action.type == "obsidian_daily_append":
         return execute_daily_append(action)
     if action.type == "obsidian_daily_read":
         return execute_daily_read()
     if action.type in {"task_add", "task_done", "task_list"}:
         return execute_task(action)
-    if action.type in {"memory_set", "memory_append", "memory_list"}:
+    if action.type in {"memory_set", "memory_append", "memory_list", "memory_add", "memory_replace", "memory_remove"}:
         return execute_memory(action)
     if action.type == "shell":
         return execute_shell(action)
+    if action.type == "session_search":
+        return execute_session_search(action)
+    if action.type in {"soul_read", "soul_write", "soul_append"}:
+        return execute_soul(action)
     if action.type == "reminder_add":
         return execute_reminder(action)
     if action.type == "undo":
@@ -771,7 +1202,11 @@ def action_from_tool_call(data: Dict[str, Any]) -> Optional[Action]:
         return None
 
     if tool == "write_file":
-        return Action("write", path=args.get("path", ""), content=args.get("content", ""))
+        path = strip_target_path_noise(args.get("path", ""))
+        content = args.get("content", "")
+        if looks_like_obsidian_relative_path(path):
+            return Action("obsidian_write", path=path, content=content)
+        return Action("write", path=path, content=content)
     if tool == "append_file":
         return Action("append", path=args.get("path", ""), content=args.get("content", ""))
     if tool == "replace_file":
@@ -786,6 +1221,24 @@ def action_from_tool_call(data: Dict[str, Any]) -> Optional[Action]:
         return Action("move_ext", path=args.get("path", "Desktop"), ext=args.get("ext", ""), dest=args.get("dest", ""))
     if tool == "obsidian_search":
         return Action("obsidian_search", term=args.get("term", ""))
+    if tool == "obsidian_status":
+        return Action("obsidian_status")
+    if tool == "obsidian_read":
+        return Action("obsidian_read", path=args.get("path", ""))
+    if tool == "obsidian_list":
+        return Action("obsidian_list", path=args.get("path", ""))
+    if tool == "obsidian_write":
+        return Action(
+            "obsidian_write",
+            path=strip_target_path_noise(args.get("path", "")),
+            content=args.get("content", ""),
+        )
+    if tool == "obsidian_append":
+        return Action("obsidian_append", path=args.get("path", ""), content=args.get("content", ""))
+    if tool == "obsidian_diary_browse":
+        return Action("obsidian_diary_browse", count=int(args.get("count", 1) or 1))
+    if tool == "obsidian_diary_recent":
+        return Action("obsidian_diary_recent", count=int(args.get("count", 7) or 7))
     if tool == "obsidian_daily_read":
         return Action("obsidian_daily_read")
     if tool == "obsidian_daily_append":
@@ -796,12 +1249,38 @@ def action_from_tool_call(data: Dict[str, Any]) -> Optional[Action]:
         return Action("task_list")
     if tool == "task_done":
         return Action("task_done", task_id=int(args.get("id", 0) or 0))
+    if tool == "memory":
+        action_name = (args.get("action") or "add").strip().lower()
+        target = (args.get("target") or "user").strip().lower()
+        content = args.get("content") or args.get("note") or ""
+        if action_name == "add":
+            return Action("memory_add", memory_target=target, note=content)
+        if action_name == "replace":
+            return Action(
+                "memory_replace",
+                memory_target=target,
+                old_text=args.get("old_text", ""),
+                new_text=args.get("new_text", content),
+            )
+        if action_name == "remove":
+            return Action("memory_remove", memory_target=target, old_text=args.get("old_text", content))
+        if action_name == "list":
+            return Action("memory_list")
+        return None
     if tool == "memory_set":
         return Action("memory_set", key=args.get("key", ""), value=args.get("value", ""))
     if tool == "memory_append":
         return Action("memory_append", note=args.get("note", ""))
     if tool == "memory_list":
         return Action("memory_list")
+    if tool == "soul_read":
+        return Action("soul_read")
+    if tool == "soul_write":
+        return Action("soul_write", content=args.get("content", ""))
+    if tool == "soul_append":
+        return Action("soul_append", content=args.get("content", ""))
+    if tool == "session_search":
+        return Action("session_search", term=args.get("term", "") or args.get("query", ""))
     if tool == "shell":
         return Action("shell", command=args.get("command", ""))
     if tool == "reminder_add":
@@ -822,6 +1301,22 @@ def run_tool_call(raw_json: str) -> None:
     except Exception as error:
         response("error", f"工具调用 JSON 解析失败：{error}", "工具调用失败")
         return
+
+    # 减法版 W1：先尝试走注册表（已搬的 3 个工具）
+    # 未注册的工具 fallthrough 到下面的 action_from_tool_call 旧链
+    tool_name = (data.get("tool") or "").strip()
+    if tool_name:
+        try:
+            from agent_tools import REGISTRY as _TOOL_REGISTRY
+        except Exception:
+            _TOOL_REGISTRY = None
+        if _TOOL_REGISTRY is not None and _TOOL_REGISTRY.get(tool_name) is not None:
+            allowed_toolsets = _resolve_allowed_toolsets()
+            status, assistant_text, footer = _TOOL_REGISTRY.dispatch(
+                tool_name, data.get("args") or {}, allowed_toolsets=allowed_toolsets
+            )
+            response(status, assistant_text, footer, tool=tool_name)
+            return
 
     action = action_from_tool_call(data)
     if not action:
@@ -848,10 +1343,138 @@ def run_tool_call(raw_json: str) -> None:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--ensure-soul":
+        from soul_store import ensure_soul
+
+        created = ensure_soul(
+            data_dir(),
+            os.environ.get("chat_assistant_label") or "Assistant",
+            soul_override(),
+        )
+        json_result(handled=True, status="success", assistant_text="灵魂已初始化" if created else "灵魂已存在", created=created)
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--soul-prompt":
+        from soul_store import soul_prompt_block
+
+        block = soul_prompt_block(data_dir(), soul_override())
+        json_result(handled=True, status="success", assistant_text=block, prompt=block)
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--migrate-memory":
+        from memory_store import ensure_migrated
+
+        migrated = ensure_migrated(data_dir())
+        json_result(handled=True, status="success", assistant_text="记忆已迁移" if migrated else "无需迁移", migrated=migrated)
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--memory-prompt":
+        store = get_memory_store()
+        block = store.prompt_block()
+        json_result(handled=True, status="success", assistant_text=block, prompt=block)
+        return
+
     if len(sys.argv) > 2 and sys.argv[1] == "--tool":
         run_tool_call(sys.argv[2])
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] == "--tool-schema":
+        try:
+            from agent_tools import REGISTRY as _TOOL_REGISTRY
+            allowed_toolsets = _resolve_allowed_toolsets()
+            schemas = _TOOL_REGISTRY.filter_schemas(allowed_toolsets)
+            print(json.dumps(schemas, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--tool-list":
+        try:
+            from agent_tools import REGISTRY as _TOOL_REGISTRY
+            print(json.dumps({"names": _TOOL_REGISTRY.names(), "toolsets": _TOOL_REGISTRY.toolsets()}, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--skills-prompt":
+        # argv: --skills-prompt <query>
+        user_query = sys.argv[2] if len(sys.argv) > 2 else ""
+        try:
+            from agent_skills import format_skills_prompt_block
+            block = format_skills_prompt_block(user_query, top_k=2)
+            print(block if block else "")
+        except Exception as exc:
+            print("")
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--skill-list":
+        try:
+            from agent_skills import load_all_skills
+            result = load_all_skills()
+            out = {
+                "skills": [{"name": s.name, "description": s.description, "version": s.version, "bundled": s.bundled, "tags": s.tags} for s in result.skills],
+                "errors": [{"path": str(p), "error": e} for p, e in result.errors],
+            }
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--curator-tick":
+        # 轻量后台 tick:24h 节流,失败静默。给 Alfred 外部 trigger + 懒触发用。
+        try:
+            from curator import tick
+            force = "--force" in sys.argv
+            result = tick(force=force)
+        except Exception as exc:
+            result = {"skipped": True, "reason": f"curator import error: {exc}"}
+        print(json.dumps(result, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--skillify":
+        # argv: --skillify <subcommand> [args...]
+        #   from-recent [--hint "..."]  创建新 skill
+        #   improve <name> [--hint "..."] 改进已有 skill
+        #   curator                    后台自动审核
+        #   confirm <name>             确认覆盖已存在的 skill
+        try:
+            from agent_skills.skillify import (
+                skillify_from_recent,
+                skillify_confirm_overwrite,
+                skillify_improve,
+                run_curator,
+            )
+            args = sys.argv[2:]
+            subcmd = args[0] if args else "from-recent"
+
+            hint = ""
+            if "--hint" in args:
+                i = args.index("--hint")
+                if i + 1 < len(args):
+                    hint = args[i + 1]
+
+            if subcmd == "curator":
+                result = run_curator()
+                print(json.dumps({"status": "ok", "curator": result}, ensure_ascii=False))
+            elif subcmd == "improve":
+                if len(args) < 2:
+                    print(json.dumps({"status": "error", "assistant_text": "用法: --skillify improve <skill-name> [--hint '...']", "footer": "参数不足"}, ensure_ascii=False))
+                else:
+                    status, msg, footer = skillify_improve(args[1], user_hint=hint)
+                    print(json.dumps({"status": status, "assistant_text": msg, "footer": footer}, ensure_ascii=False))
+            elif subcmd == "confirm":
+                if len(args) < 2:
+                    print(json.dumps({"status": "error", "assistant_text": "用法: --skillify confirm <skill-name>", "footer": "参数不足"}, ensure_ascii=False))
+                else:
+                    status, msg, footer = skillify_confirm_overwrite(args[1])
+                    print(json.dumps({"status": status, "assistant_text": msg, "footer": footer}, ensure_ascii=False))
+            else:
+                # default: from-recent (backward compatible)
+                status, msg, footer = skillify_from_recent(user_hint=hint)
+                print(json.dumps({"status": status, "assistant_text": msg, "footer": footer}, ensure_ascii=False))
+        except Exception as exc:
+            print(json.dumps({"status": "error", "assistant_text": str(exc), "footer": "失败"}, ensure_ascii=False))
+        return
     query = sys.argv[1] if len(sys.argv) > 1 else ""
     trimmed = query.strip()
 
@@ -873,6 +1496,13 @@ def main() -> None:
     action = parse_intent(trimmed)
     if not action:
         json_result(handled=False)
+        return
+
+    if action.type == "skillify":
+        from agent_skills.skillify import skillify_from_recent
+
+        status, assistant_text, footer = skillify_from_recent(user_hint=action.note or trimmed)
+        response(status, assistant_text, footer)
         return
 
     target = resolve_path(action.path) if action.path else HOME
