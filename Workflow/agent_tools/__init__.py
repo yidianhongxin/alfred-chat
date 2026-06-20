@@ -24,6 +24,10 @@ from . import task                # 内含 task_add / task_list / task_done
 from . import session_search
 from . import reminder_add
 
+# W7: 公网搜索 + 抓取
+from . import web_search          # Tavily 搜索 API,需要 TAVILY_API_KEY
+from . import web_fetch           # baoyu-fetch CLI 包装,需 bun + Chrome
+
 __all__ = [
     "REGISTRY",
     "ToolDef",

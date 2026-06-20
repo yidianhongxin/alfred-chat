@@ -3094,6 +3094,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W6 (rename → recent chat 不再空白)</string>
+	<string>W7 (web_search Tavily + web_fetch baoyu-fetch)</string>
 </dict>
 </plist>
