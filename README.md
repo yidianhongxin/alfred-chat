@@ -2,6 +2,12 @@
 
 Alfred 5 对话框聊天 Workflow，支持多 Provider 本地 Agent（文件 / Obsidian / 记忆 / 工具调用）。
 
+## Demo
+
+输入 `ask 你的问题` 直接开新对话（带上问题作为首轮上下文）：
+
+![ask keyword demo](assets/ask-keyword-new-chat.gif)
+
 ## 安装
 
 1. 下载 [`Alfred Chat.alfredworkflow`](Alfred%20Chat.alfredworkflow) 并双击安装。
