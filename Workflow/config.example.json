@@ -1,0 +1,4 @@
+{
+  "_comment": "填入你在 https://tavily.com 注册拿到的 tvly-xxx 格式 key,然后保存。改完 Alfred Chat 即时生效,不需要重启。",
+  "tavily_api_key": "tvly-PASTE-YOUR-KEY-HERE"
+}
