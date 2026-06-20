@@ -4,6 +4,22 @@
 <dict>
 	<key>bundleid</key>
 	<string>com.drlerr.alfred-chat</string>
+	<key>config</key>
+	<dict>
+		<key>conifgs</key>
+		<array>
+			<dict>
+				<key>id</key>
+				<string>tavily_api_key</string>
+				<key>type</key>
+				<string>password</string>
+				<key>title</key>
+				<string>Tavily API Key</string>
+				<key>subtitle</key>
+				<string>注册 https://tavily.com 拿 tvly-xxx 格式 key(web_search 联网搜索用,免费 1000 次/月)</string>
+			</dict>
+		</array>
+	</dict>
 	<key>connections</key>
 	<dict>
 		<key>002874FF-3AE4-4E8F-A4F8-65844E5D6CFB</key>
