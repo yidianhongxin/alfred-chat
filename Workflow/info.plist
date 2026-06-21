@@ -3096,6 +3096,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.10.1 (修 W7.10 regression: decideToolUse 是顶层 fn 直接引用 runMain const session 会 throw ReferenceError 让 Alfred 收不到 JSON; 改用 sessionContext 参数传入)</string>
+	<string>W7.11 (回滚 W7.10 LLM 路由: M3 推理模型不擅 JSON 路由仍瞎说已写入; 改为 chat script 直接匹配「放/存 X.md」正则抓 path, LLM 只做 content synthesize, 然后手动调 obsidian_write)</string>
 </dict>
 </plist>
