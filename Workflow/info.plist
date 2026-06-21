@@ -3096,6 +3096,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.10 (修 LLM 路由链路: 移除 looksLikeLocalAgentQuery 过宽 OB库 匹配; decideToolUse 注入对话历史; toolRouterPrompt 加 5 条硬性 rule 禁分步/必填 content)</string>
+	<string>W7.10.1 (修 W7.10 regression: decideToolUse 是顶层 fn 直接引用 runMain const session 会 throw ReferenceError 让 Alfred 收不到 JSON; 改用 sessionContext 参数传入)</string>
 </dict>
 </plist>
