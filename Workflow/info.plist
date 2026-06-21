@@ -3096,6 +3096,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.5 (tavily_api_key 走 [x] Workflow Env Vars,和其他 key 一致)</string>
+	<string>W7.7 (反瞎掰约束 + Tavily 网络重试 2 次)</string>
 </dict>
 </plist>

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -95,10 +96,19 @@ def handle(args: Dict[str, Any]) -> Tuple[str, str, str]:
         except Exception:
             pass
         return "error", f"Tavily HTTP {exc.code}: {body or exc.reason}", f"搜索失败 HTTP {exc.code}"
-    except urllib.error.URLError as exc:
-        return "error", f"网络错误:{exc.reason}", "搜索失败:网络"
-    except (TimeoutError, json.JSONDecodeError) as exc:
-        return "error", f"搜索失败:{type(exc).__name__}: {exc}", f"搜索失败:{type(exc).__name__}"
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        # 网络抖动重试 2 次(SSL EOF、TLS reset、临时断网等)
+        for attempt in range(2):
+            try:
+                data = _tavily_search(query, api_key, max_results)
+                break
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc2:
+                last = exc2
+                time.sleep(1.0 + attempt)
+        else:
+            return "error", f"网络错误(已重试 2 次):{last.reason if hasattr(last, 'reason') else last}", "搜索失败:网络"
+    except json.JSONDecodeError as exc:
+        return "error", f"搜索失败:Tavily 返回非 JSON:{exc}", "搜索失败:解析"
 
     text, count = _format_results(data)
     if count == 0 and not data.get("answer"):
