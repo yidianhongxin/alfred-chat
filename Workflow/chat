@@ -217,11 +217,13 @@ function soulPrompt() {
 function runtimeGuardPrompt() {
   return [
     "【运行约束 · 最高优先级，与上文任何“主动去做”的指令冲突时以本节为准】",
-    "你在一个单轮流式对话里运行：本次回复结束后没有自动续跑，你写下的任何“等会儿/接下来我会去做”的动作都不会真的发生。",
+    "你在一个单轮流式对话里运行：本次回复结束后没有自动续跑，你写下的任何「等会儿/接下来我会去做」的动作都不会真的发生。",
     "你实际拥有的能力（仅这些，由本地 Agent 在你回复前自动完成，你无法在回复中途临时调用）：",
     "- 读写 /Users/DRLer 下的本地文件、Obsidian 库；新增提醒；读写长期记忆。",
     "- 联网搜索 web_search（调 Tavily API，免费 1000 次/月，需在 [x] Workflow Env Vars 配 tavily_api_key）。",
     "- 网页抓取 web_fetch（调 baoyu-fetch CLI，需 bun + Chrome）。",
+    "- 工具可以连续调用（web_search → web_fetch → web_search 再次搜细节），直到拿到完整信息。",
+    "- 工具调用结束后会有一步「合成」:把原始搜索结果/网页 markdown 整理成简洁答案（这一步已由 runtimeGuard 强制:禁止瞎掰/禁止套用无关结果/必须标注来源）。",
     "你没有的能力（绝不要声称会去做）：",
     "- 跑未授权的本地 shell 命令、调未列出的外部服务、查未授权的数据库、等待后续结果。",
     "硬性输出规则：",
@@ -654,10 +656,11 @@ function toolRouterPrompt() {
     "你是 Alfred Chat 的工具路由器。判断用户请求是否需要调用本地工具。",
     "只返回 JSON，不要解释，不要 Markdown。",
     "如果不需要工具，返回 {\"tool\":\"none\",\"args\":{}}。",
-    "只有当用户明确要求读写本地文件、Obsidian、任务、记忆、白名单命令或撤销时才调用工具。",
-    "普通知识问答、写作、解释、关于文件操作方法的问题都返回 none。",
-    "例外：用户问实时/最新/不知道/模糊/不确定/刚出/最近发生/网络上/搜一下/查一下/百度/谷歌/上网/搜索 → web_search(query=用户的问句)",
-    "例外：用户给一个 URL 要抓内容 → web_fetch(url=那个 URL)",
+    "需要外部信息（你不知道 / 用户问实时/最新/最近/刚出/网络上/搜一下/查一下/百度/谷歌/上网/搜索）→ web_search(query=用户的问句)",
+    "用户提供 URL 想看完整内容（「这个页面讲什么」/「帮我读下」）→ web_fetch(url=那个 URL)",
+    "拿到搜索结果后,如果只是标题/链接不够,可以再调 web_fetch 抓具体页面深挖。",
+    "用户要求读写本地文件、Obsidian、任务、记忆、白名单命令、撤销时,按对应 obsidian_*/read_file/write_file/reminder_* 工具走。",
+    "纯写作/翻译/解释概念/你已经能从训练数据答出的问题 → 返回 none,不要硬塞工具。",
     `${loadToolSchemas().map(s => {
       const params = s.parameters && s.parameters.properties ?
         Object.entries(s.parameters.properties).map(([k, v]) => `${k}${s.parameters.required && s.parameters.required.includes(k) ? "" : "?"}:${v.type || "any"}`).join(", ") :
@@ -700,6 +703,10 @@ function mayNeedModelToolUse(text) {
     new RegExp(`${actionWords}[^？?\\n]{0,80}${fileHint}`, "i").test(text) ||
     new RegExp(`${fileHint}[^？?\\n]{0,80}${actionWords}`, "i").test(text) ||
     /(?:上网|网上|联网|搜索|搜一下|搜一搜|查一下|查一查|百度|谷歌|google|bing|查查看|查查|实时|最新|不知道|不确定|什么什么样|什么是什么|哪个|谁)/i.test(text) ||
+    /(?:电视剧|电影|动漫|纪录片|综艺|演员|角色|剧情|主演|饰演|扮演|出演|演[的得]|导演|编剧|豆瓣|百科|演员表|剧情介绍|人物介绍|剧透|讲什么|设定|人设|原型|口碑|评价|影评|剧评|收视|集数|首播|大结局|番外|续集|第二季|第三季|同名|翻拍|原著|小说|漫画|演员阵容)/i.test(text) ||
+    /(?:是什么|什么是|是[哪什么]|是[什么啥]|是什么人|什么是人|是哪个人|是谁演的|谁演的|谁演|谁主演|谁[主配]演|谁[的得]|剧情是|剧情讲|讲[的得]是|讲[的得]什么|怎么|怎样|咋|资料|信息|介绍|简介|背景|出处|来源)/i.test(text) ||
+    /(?:用搜索|用web|用tavily|用联网|用百度|搜搜|搜一搜|查查看|用一下搜索|查一查|用搜索搜|查查)/i.test(text) ||
+    /(?:2024|2025|2026|2027|新剧|新片|新出|今年|去年|这剧|这部剧|那剧|那部剧|这个剧|那个剧|你看过|你听说|你听过|你[知了]解|知不知道)/i.test(text) ||
     /https?:\/\//i.test(text)
 }
 
@@ -724,6 +731,9 @@ function decideToolUse(provider, typedQuery, timeoutSeconds) {
 
 function shouldFinalizeToolResult(toolCall, typedQuery) {
   const tool = toolCall?.tool || ""
+  // web_search / web_fetch 永远合成: LLM 拿到原始 Tavily 输出/网页 markdown 后整理成干净答案
+  if (["web_search", "web_fetch"].includes(tool)) return true
+  // 其他工具需要用户明确说"总结/分析"才合成,否则直接显示原始结果
   return /总结|分析|解释|提取|根据|帮我|整理成|改写/i.test(typedQuery) &&
     ["read_file", "obsidian_daily_read", "obsidian_diary_browse", "obsidian_diary_recent", "obsidian_search", "obsidian_read", "obsidian_list", "obsidian_status", "session_search", "list_dir", "shell"].includes(tool)
 }
@@ -733,7 +743,19 @@ function finalizeToolResult(provider, systemPrompt, typedQuery, toolResultText, 
     model: provider.model,
     messages: [
       { role: "system", content: systemPrompt || "你是一个有帮助的 AI 助手。" },
-      { role: "user", content: `用户原始请求：${typedQuery}\n\n本地工具结果：\n${toolResultText}\n\n请基于工具结果回答用户。` }
+      { role: "user", content: [
+        `用户原始请求：${typedQuery}`,
+        "",
+        "工具结果（原始）：",
+        toolResultText,
+        "",
+        "【合成要求 · 务必遵守】",
+        "1. 工具结果若说「未找到/0 条/网络错误/失败」,直接告诉用户搜不到/失败,不要用训练数据补全。",
+        "2. 工具结果若与问题不直接相关,明确说「搜索结果中未找到 X 的相关信息」,不要强行套用。",
+        "3. 引用工具结果时显式标注来源（用「Tavily 搜索结果显示…」「搜索结果中提到…」）,不要把搜索结果伪装成「我从公开资料里看到…」这种凭空背书。",
+        "4. 整理成简洁的最终答案：1-3 段,关键事实用【】或加粗突出,带 1-2 条原始链接方便用户验证。",
+        "5. 不要复述工具结果的 markdown 格式（标题/列表/编号）,用自然语言重新组织。"
+      ].join("\n") }
     ],
     stream: false
   }, Math.min(timeoutSeconds, 30))
