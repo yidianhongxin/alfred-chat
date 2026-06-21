@@ -489,7 +489,9 @@ function looksLikeLocalAgentQuery(text) {
     /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(trimmed) ||
     /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(trimmed) ||
     /^搜索(?:OB|Obsidian|ob)/i.test(trimmed) ||
-    /(?:OB|Obsidian|ob)库/i.test(trimmed) ||
+    // 去掉 /(?:OB|Obsidian|ob)库/ 的过宽匹配：之前会让"写入ob库"直接走本地 NLP agent,
+    // 完全绕过 LLM 工具路由,导致 LLM 看不到对话历史瞎说"先确认再写入"却根本没调 obsidian_write.
+    // 改由 mayNeedModelToolUse + decideToolUse 路由处理 (W7.10)
     /(?:新建|创建|写入)(?:一篇|一个|一份|到)?\s*(?:0\.inbox|10\.DL)/i.test(trimmed) ||
     /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(trimmed) ||
     /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(trimmed) ||
@@ -677,7 +679,14 @@ function toolRouterPrompt() {
     "示例：读下ob库今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
     "示例：帮我总结今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
     "示例：早上9点30提醒我打卡 -> {\"tool\":\"none\",\"args\":{}}（本地直接解析，不走模型）",
-    "示例：明天下午3点提醒开会 -> reminder_add 由本地解析"
+    "示例：明天下午3点提醒开会 -> reminder_add 由本地解析",
+    "",
+    "【W7.10 硬性规则 — 违反会引发 LLM 瞎说已写入但实际没调工具】",
+    "1. 不要分多步决策（不要「先 obsidian_read 确认库状态 → 再 obsidian_write」这种链式）。如果你需要写文件,就在一次返回里把 path + content 都给全,content 必须从对话历史里直接抓取或基于上文总结。",
+    "2. 用户上文是 web_search / web_fetch / 之前轮 obsidian_* 工具的结果,且当前请求是写入 obsidian_* → 你必须把该结果填进 args.content 字段(可适当整理但不能丢关键事实),不能再返回 {\"tool\":\"none\"} 推给用户。",
+    "3. 不知道写到 OB 哪个路径时,默认用 0.inbox/<简短slug>.md；不要因为路径不确定就返回 none。",
+    "4. 用户问「写入 ob 库 / 写入 OB」无具体路径 → 返回 {\"tool\":\"obsidian_write\",\"args\":{\"path\":\"0.inbox/<根据上文主题起的slug>.md\",\"content\":\"<上文内容整理>\"}}，不要拆分。",
+    "5. 如果你打算说「我会…/我先…/接下来我…」,那这次调用就必须把 tool call 一次出完,不允许只表态不返回 JSON。"
   ].join("\n")
 }
 
@@ -711,10 +720,19 @@ function mayNeedModelToolUse(text) {
 }
 
 function decideToolUse(provider, typedQuery, timeoutSeconds) {
+  // 注入最近 4 轮对话历史 (W7.10): 让 LLM 看到上轮的 web_search/web_fetch/tool 结果,
+  // 才能在 obsidian_write args.content 里填入真实内容,避免"先 X 后 Y"的两步决策.
+  const recentContext = (session && Array.isArray(session.messages)) ?
+    session.messages.slice(-8) : []
+  const historyMessages = recentContext
+    .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim().length > 0)
+    .map(m => ({ role: m.role, content: m.content.length > 1500 ? m.content.slice(-1500) : m.content }))
+
   const result = runChatCompletion(provider, {
     model: provider.model,
     messages: [
       { role: "system", content: toolRouterPrompt() },
+      ...historyMessages,
       { role: "user", content: typedQuery }
     ],
     stream: false,

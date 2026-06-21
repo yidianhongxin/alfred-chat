@@ -3096,6 +3096,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.9 (修复 mayNeedModelToolUse: 加入放/存/保存/存到/放进/录入/塞等口语写文件动词,避免 LLM 假装已写入 OB)</string>
+	<string>W7.10 (修 LLM 路由链路: 移除 looksLikeLocalAgentQuery 过宽 OB库 匹配; decideToolUse 注入对话历史; toolRouterPrompt 加 5 条硬性 rule 禁分步/必填 content)</string>
 </dict>
 </plist>
