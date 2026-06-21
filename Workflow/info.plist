@@ -4,22 +4,6 @@
 <dict>
 	<key>bundleid</key>
 	<string>com.drlerr.alfred-chat</string>
-	<key>config</key>
-	<dict>
-		<key>configs</key>
-		<array>
-			<dict>
-				<key>id</key>
-				<string>tavily_api_key</string>
-				<key>type</key>
-				<string>password</string>
-				<key>title</key>
-				<string>Tavily API Key</string>
-				<key>subtitle</key>
-				<string>注册 https://tavily.com 拿 tvly-xxx 格式 key(web_search 联网搜索用,免费 1000 次/月)</string>
-			</dict>
-		</array>
-	</dict>
 	<key>connections</key>
 	<dict>
 		<key>002874FF-3AE4-4E8F-A4F8-65844E5D6CFB</key>
@@ -3104,12 +3088,14 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 		<key>provider_single</key>
 		<string></string>
+		<key>tavily_api_key</key>
+		<string></string>
 	</dict>
 	<key>version</key>
 	<string>1.8.3</string>
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.2 (Tavily 走 Configure Workflow UI,字段名 configs 已修正)</string>
+	<string>W7.5 (tavily_api_key 走 [x] Workflow Env Vars,和其他 key 一致)</string>
 </dict>
 </plist>

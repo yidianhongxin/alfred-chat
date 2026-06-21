@@ -3,8 +3,9 @@
 Tavily 是为 AI Agent 设计的搜索 API,返回「综合答案 + 列表」,中文支持良好。
 免费额度 1000 次/月,适合个人 Alfred Chat 使用。
 
-API Key 在 Alfred Preferences → Workflows → Alfred Chat → 右侧 Configure Workflow
-面板里的 "Tavily API Key" 字段填写(由 Alfred 自动注入为环境变量 tavily_api_key)。
+API Key 在 Alfred Preferences → Workflows → Alfred Chat → 右侧 [x]
+Workflow Environment Variables 里的 tavily_api_key 行填写(由 Alfred
+自动注入为环境变量 tavily_api_key)。
 """
 
 from __future__ import annotations
@@ -70,8 +71,9 @@ def handle(args: Dict[str, Any]) -> Tuple[str, str, str]:
         return (
             "error",
             "未配置 Tavily API Key。\n\n"
-            "配置方式:Alfred Preferences → Workflows → Alfred Chat → 右侧\n"
-            "Configure Workflow → 「Tavily API Key」字段填入你的 key → 保存。\n\n"
+            "配置方式:Alfred Preferences → Workflows → Alfred Chat → 右侧 [x]\n"
+            "图标 → 弹出 Workflow Environment Variables 面板 → 找到 tavily_api_key\n"
+            "一行 → 填入 key → 保存。\n\n"
             "注册拿 key:https://tavily.com (免费 1000 次/月)",
             "缺少 Tavily API Key",
         )
