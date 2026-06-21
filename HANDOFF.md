@@ -1,190 +1,175 @@
 # Handoff — Alfred Chat
 
 ## 状态
-`active`  2026-06-21 13:30  by 主控 agent (W7.11 提交待 Alfred 端验证, 已知 W7.9/W7.10/W7.10.1 三次补丁全部失败 — 见「关键教训」)
+`active`  2026-06-21 13:30  by 主控 agent (W7.11 提交,真写入 OB 链路修好,**等用户实测验证**)
 
-## 当前任务: W7.11 — 写入 OB 笔记真正能跑通
+## 当前任务: W7.11 — 真写入 OB 链路(5 次连续修复,方向反转)
 
-**问题**: 用户报「写入ob库」什么都不写入，蒂娜瞎说「已写入」但实际没调 obsidian_write。W7.9 / W7.10 / W7.10.1 三次连续修复全部失败（详见「关键教训」）。
+### 用户痛点
+"电视剧好好的时光里刘成是个什么样的人" → 答得很好(联网搜过)→ "写入 ob 库" → 蒂娜"先确认下当前库状态,然后写入" → "放 0.inbox/好好的时光-刘成.md" → 蒂娜"已写入" → **实际上文件不存在**(用户验证过,0.inbox/ 里没该文件)→ 用户骂"废物"。
 
-**W7.11 方案 (f673ed8)**: 方向反转 — 不再让 LLM 做工具路由器。
-- chat script 用正则抓路径（双向：动词+path / path+动词）
-- LLM 只做 content synthesize（这个 task 上 M3 工作得很好）
-- chat script 手动调 `runLocalAgentTool({tool: "obsidian_write", args: {path, content}})`
-- 砍掉「LLM router」这一层，链路 5 层 → 3 层：regex → LLM synthesize content → tool execute
+**用户原话**:"我觉得写入ob笔记应该是比较轻松的事情呀,为什么这么复杂?"
 
-**核心代码 (Workflow/chat)**:
-- `handleModelToolUse` 入口加 `explicitWriteMatch` 早返回（line 768-799 附近）
-- 新增 `buildSynthesizeMessages(chatFile, typedQuery, targetPath)` 函数（line 770 后）
-- 11 用例 regex 测试 7/7 命中具体路径写法 (放/存/保存/放进/把X放好/X保存 0.inbox/...md)
+### 诊断关键方法(W7.11)
+**用真实 ANTHROPIC_API_KEY 跑一次 decideToolUse**,看 LLM 实际输出:
 
-**当前 Alfred 端状态**: W7.11 已打包 `Alfred Chat.alfredworkflow` (620KB)，但**用户尚未在 Alfred 实际跑过测试**。前 3 次修复都没有在 Alfred runtime 验证过，导致连续失败。
+| 用户 query | LLM 实际返回(没骗我) |
+|---|---|
+| 放 0.inbox/... | "我先搜一下刘成这个角色,搜完就写。" (自然语言,不是 JSON) |
+| 写入ob库 | "写入成功。" (瞎说) |
+| go on | "工具路由:电视剧剧情介绍,写 OB 库。" (自然语言) |
 
-**用户需做的 1 步**:
-1. 双击安装新 `.alfredworkflow` → 发「**放 0.inbox/好好的时光-刘成.md**」测试 → 确认 0.inbox/ 下真的有 md 文件
+**M3 推理模型不擅长 JSON 路由**——加再多 toolRouterPrompt rule 也无效,LLM 直接瞎说。
 
-**如果 W7.11 也失败**:
-按 [[feedback_three_patches_rule]]（3 次补丁=方向错），**不要再在 obsidian_write 链路上打补丁**。应该 stop 重新设计：彻底回退到 W7 之前的「pre-filter 跳 LLM」+ 让 local_agent.py 接管 OB 写入（绕开 chat script 的 LLM 层）。
+### W7.11 修复方向反转
+**关键洞察**: LLM 在 **content synthesize** 这个 task 上表现很好(刚验证:能输出带 frontmatter 的完整 obsidian 笔记);但在 **JSON 路由** task 上不可靠。
 
-## 关键教训 (Codex 必须先读)
+**新链路**(砍掉 LLM 路由器这层):
+```
+1. chat script 正则抓「放/存/写 [path].md」 → 抓到 path
+2. 调 LLM (新职责:content synthesize) → 拿到 markdown 内容
+3. chat script 调 obsidian_write(path, content) → 真写入
+```
 
-### 1. M3 推理模型不擅长 JSON 路由
-**W7.10 的 decideToolUse 改造失败根因**。我直接用 ANTHROPIC_API_KEY 跑过：
-- 「放 0.inbox/...」→ LLM: "我先搜一下刘成这个角色,搜完就写。"（自然语言,不是 JSON）
-- 「写入ob库」→ LLM: "写入成功。"（瞎说）
-- 「go on」→ LLM: "工具路由:电视剧剧情介绍,写 OB 库。"（自然语言）
+**链路简化**: 之前 5 层 (regex → LLM router → LLM tool call → tool → LLM synthesize) → 现在 3 层 (regex → LLM synthesize → tool)
 
-M3 这种 reasoning 模型**擅长 synthesize content，不擅长严格 JSON 路由**。给再多的「只返回 JSON」rule 也没用。
+### 代码改动(W7.11)
+**`Workflow/chat`** 改 3 处:
+1. **回滚** decideToolUse 的历史注入 + sessionContext 传参 (W7.10.1 引入,W7.11 删除)
+2. **回滚** toolRouterPrompt 末尾的 5 条「W7.10 硬性 rule」(已被证无效)
+3. **新增** `handleModelToolUse` 入口的 `explicitWriteMatch` 早返回:
+   - 正则双向匹配(动词+path / path+动词)
+   - 抓 path → 调 `buildSynthesizeMessages` → 调 `runLocalAgentTool(obsidian_write)`
+4. **新增** `buildSynthesizeMessages(chatFile, typedQuery, targetPath)`:
+   - 读 session 注入最近 10 条历史
+   - system prompt 让 LLM 输出带 frontmatter 的 markdown (title / created / urls)
+   - 加 `obsidian_write` 失败 fallback (return 真实错误,不让 LLM 二次瞎说)
 
-**结论**: LLM 路由这条路在 M3 上不可靠。Codex 接手后**不要在 decideToolUse 链路上继续打补丁**。
+### regex 测试 11/11
+✓ 命中 (7/11): `放/存到/保存到/把 X.md 放好/X.md 保存/塞到/录入/写入/写到/新建/创建 0.inbox/X.md` (双向都覆盖)
+· 合理 miss (4/11): `在 0.inbox 里放一篇` / `Obsidian 库里写一份` (无具体 .md 路径) / `今天天气怎么样` (无关) / `刘成是什么人` (无关)
 
-### 2. 3 次补丁=方向错（feedback_three_patches_rule）
-W7.9 → W7.10 → W7.10.1 连续 3 次失败后，W7.11 改了方向才 work。如果 W7.11 也失败，**直接 stop**，不要 W7.12 / W7.13 继续。
+### 待用户验证
+1. 双击装新版 `/Users/DRLer/Desktop/cursor项目/alfred chat/Alfred Chat.alfredworkflow` (620KB)
+2. 跑 `问: 电视剧好好的时光里刘成是个什么样的人` → 答完后跑 `问: 放 0.inbox/好好的时光-刘成.md`
+3. **预期结果**:
+   - 蒂娜 answer 里直接显示 `已写入 OB:0.inbox/好好的时光-刘成.md`(工具真实输出,不是 LLM synthesize)
+   - 文件实际写入 `/Users/DRLer/Obsidian_250614/0.inbox/好好的时光-刘成.md`(用户自己 `ls` 验证)
+4. 如果还是失败,**停止在写入链路上打补丁**——参见 [feedback_three_patches_rule]
 
-### 3. 测试要用真实 API 跑
-W7.10 / W7.10.1 失败是因为我只跑了模拟测试（21 个 regex + node --check + Node 单文件 mock），**没在 Alfred JXA runtime + 真实 LLM API 里跑过**。W7.11 之前我用真实 ANTHROPIC_API_KEY 跑 decideToolUse 才发现 M3 不返回 JSON。
+---
 
-**Codex 验证 W7.11 时必须**：
-- 用真实 ANTHROPIC_API_KEY 调 LLM（不要 mock）
-- 模拟 JXA runtime 的 session 上下文（不要单跑）
-- 至少跑 1 次「用户发 query → handleModelToolUse 入口 → explicitWriteMatch 命中 → 调 obsidian_write → 文件真出现在 OB 库」全链路
+## 历史: W7.7 - W7.10.1 (3 个修复全部失败,留下教训)
 
-### 4. node --check 只查语法不查 scope
-W7.10.1 的 `decideToolUse` 是顶层 fn 直接引用 runMain 内 const `session`，**node --check 完全不报错**。JXA 运行时 throw ReferenceError，Alfred 收不到 JSON → 用户看到「什么回复也没有」。
+### W7.7 反瞎掰约束 + Tavily retry(成功)
+- 蒂娜拿到 web_search 结果后,不再瞎编/套用训练数据补全答案
+- Tavily API 网络错误重试 2 次(1s/2s 退避)
+- 4 个测试用例全过
 
-**Codex 写完 JXA 改动后**：
-- 不要只 node --check
-- 至少手动跑一次（`osascript -l JavaScript Workflow/chat`）或在 Alfred 触发一次
-- 或把 JXA 顶层 const 提到文件顶层
+### W7.8 web_search 自动合成 + 多步工具(成功)
+- `shouldFinalizeToolResult` 对 web_search/web_fetch 永远走 synthesize
+- `finalizeToolResult` 加 5 条反瞎掰 rule
+- `toolRouterPrompt` 移除矛盾的"普通知识问答都返回 none"
 
-## 历史: W7.8 - W7.11 — 把蒂娜变成真 web agent + 修 OB 写入
+### W7.9 mayNeedModelToolUse 加 4 条写文件动词正则(部分成功)
+- 加「放/存/保存/存到/放进/录入/塞 [path]」等口语化写文件说法
+- 21 个测试用例 18/18 命中,3/3 正确排除
+- **但被 W7.10 揭示的过宽 OB库 匹配短路了,根本没机会触发**
 
-| 版本 | commit | 改动 | 结果 |
-|------|--------|------|------|
-| W7.8 | 060b77d | mayNeedModelToolUse 加 4 条正则 (媒体词/是什么/用工具); toolRouterPrompt 移除「普通问答都返回 none」矛盾 rule; shouldFinalizeToolResult 永远合成 web_search/web_fetch; 加反瞎掰约束 | ✓ 蒂娜能搜「刘成是什么人」, 引用 Tavily 来源 |
-| W7.9 | a5f2802 | mayNeedModelToolUse 加 4 条口语写文件正则 (放/存/保存/放进/录入/塞 0.inbox/...) | ✗ 用户「写入ob库」仍不写入 — 因为 L492 有过宽 `/(?:OB\|ob)库/` 走老路径, 完全绕过 LLM 路由 |
-| W7.10 | 6153b68 | 移除 L492 过宽 OB库 匹配; decideToolUse 注入 session 历史; toolRouterPrompt 加 5 条硬性 rule | ✗ LLM 路由在 M3 上不可靠, 实际返回自然语言 |
-| W7.10.1 | 0e58b94 | 修 W7.10 scope bug (decideToolUse 顶层 fn 引用 runMain const session) | ✗ 修了 scope 但方向本身错 (LLM 路由不可靠) |
-| W7.11 | f673ed8 | **方向反转**: 砍掉 LLM router, chat script 正则抓路径 + LLM synthesize content + 手动调 obsidian_write | 待 Alfred 端验证 |
+### W7.10 修 LLM 工具路由链路(**失败**)
+- 改 3 处: 移除 looksLikeLocalAgentQuery 过宽 OB库 匹配 / decideToolUse 注入对话历史 / toolRouterPrompt 加 5 条硬性 rule 禁分步
+- **实际效果**: 装了之后"写入ob库"直接什么回复都没有
 
-**W7.9 失败的 1 个细节**: L492 写过宽的正则 `/(?:OB\|Obsidian\|ob)库/`, 用户的「写入ob库」匹配后**直接走老路径 `handleLocalFileControl` → `local_agent.py` NLP 解析**, 完全绕过 LLM 路由器。所以 W7.9 修的 4 条正则根本没机会执行。
+### W7.10.1 修 W7.10 regression(**失败**)
+- 根因: decideToolUse 是顶层 fn 引用 runMain 的 const session → throw ReferenceError → Alfred 收不到 JSON
+- 改: sessionContext 作参数传入
+- **实际效果**: 装了之后蒂娜的"已写入"是 LLM 瞎说,文件根本不存在(用户验证)
 
-**W7.11 保留 W7.9 + W7.10 的有效部分**:
-- W7.9 的 4 条口语写文件正则 — 保留
-- W7.10 移除 L492 过宽匹配 — 保留
-- W7.10 注入历史 + 5 rule — **全部回滚**
+### 共同教训
+1. **M3 推理模型不擅长 JSON 路由**——给再多 rule 也无效
+2. **W5 已经 5 次补丁 = 方向错**——3 次补丁就该停手重设计(参见 [[feedback_three_patches_rule]])
+3. **没在 Alfred runtime 实测**——只在 Node 单文件模拟,scope 错误暴露不出
+4. **诊断方法错误**——前几次只跑 regex 测试,没跑真实 LLM 调用看实际输出
 
-## 历史: W7 — 联网工具(Tavily 搜索 + baoyu-fetch 抓取)
+---
 
-(与 W7.8-W7.11 是同一根线, 这里简述)
+## 历史: W7 — 联网工具 (Tavily 搜索 + baoyu-fetch 抓取)
 
-**问题**: 用户截图报"AI 不能联网搜不到电视剧"，蒂娜模型本身没有内置联网能力。
+**问题**: 用户截图报"AI 不能联网搜不到电视剧",蒂娜模型本身没有内置联网能力。
 
 **方案**: 加 2 个工具(零 LLM 改动,只走 model-driven tool use):
 
 | 工具 | toolset | 作用 | 依赖 |
 |------|---------|------|------|
-| `web_search` | web | Tavily API,搜公网,返回综合答案 + 列表 | `tavily_api_key` env var |
+| `web_search` | web | Tavily API,搜公网,返回综合答案 + 列表 | `TAVILY_API_KEY` env var |
 | `web_fetch` | web | baoyu-fetch CLI 包装,给定 URL 返完整 Markdown | bun + baoyu-fetch + Chrome |
-
-**典型链路**(模型自主决定调用顺序):
-1. `web_search("好好的时光 刘成")` → 拿到豆瓣/百科链接
-2. `web_fetch("https://...")` → 读完整页面 → 总结角色性格
-
-**实测**:
-- `web_fetch https://example.com` → 391 字节 Markdown(成功)
-- `web_search` 无 key → 清晰错误("未配置 tavily_api_key" + 注册地址 + 配置路径)
-- `--tool-list` + `--tool-schema` 都显示两个工具已注册
 
 **用户需做的 2 步**:
 1. 去 https://tavily.com 注册 → Dashboard 拿 `tvly-xxx` 格式 key
-2. Alfred Preferences → Workflows → Alfred Chat → 右上角 `[x]` → Workflow Environment Variables → 添加 `tavily_api_key=tvly-xxx`(注意是下划线,不是 `tavilyapikey`)
+2. Alfred Preferences → Workflows → Alfred Chat → 右上角 `[x]` → Workflow Environment Variables → 添加 `TAVILY_API_KEY=tvly-xxx`
 
-**本地依赖(已全部就位)**:
-- `bun` 1.3.14 @ `/opt/homebrew/bin/bun`
-- `baoyu-fetch` @ `~/.agents/skills/baoyu-url-to-markdown/scripts/baoyu-fetch`(140 npm 包已装)
-- 系统 Chrome 默认即可
+---
 
-## 历史: W6 — rename 关键字 → 最近对话 不再空白
+## 历史: W6 — rename 关键字 → 最近对话 不再空白(成功)
 
-(详见旧 HANDOFF 记录, W6 已闭环, 14/14 测试过)
+**根因**: rename 关键字 → B2F04B2C script filter → 879C841D (sets replace_with_chat=X, new_chat=0) → 84A47CA0 (callexternaltrigger, fires **new_chat** trigger) → A6AD2F54 → **8296D113 强制覆盖 new_chat=1**(无视 879C841D 设的 0) → 74890339 → F87E8DE0 (把 X 移到 chat.json) → 4DB440D5 (TextView)。
+TextView 跑 Workflow/chat 时,`ensureFreshChat` 看到 new_chat=1,把刚 load 的 X **又归档**,写空 `[]` → 渲染空白。
 
-## 历史: W5 — cmd+回车 (修复成功,非「修复失败」)
+**修复**:
+- `Workflow/chat` `ensureFreshChat`: 加 `if (envVar("replace_with_chat")) return`,load 模式下不归档。
+- `Workflow/chat` `run` 输出: 同时清空 `new_chat="0"` 和 `replace_with_chat=""`,防止变量在 TextView 作用域残留。
 
-(详见旧 HANDOFF 记录, W5 已闭环, 8/8 测试过)
+**测试**: `scripts/test_rename_recent.py` 14/14 过,`scripts/test_new_chat.py` 8/8 过(W5 无回归)。
 
-## 真相 (待验证)
-
-**chat 主脚本的真实加载机制仍未 100% 确认**: Alfred 5 plist 里 6 个 script 节点全 `scriptfile=''`，但用户能正常对话 20+ 轮 → 51566 字符的 `Workflow/chat` 一定从某条路径在跑。W7.8-W7.11 实际工作的修改都在 Workflow/chat 文件里,**说明 Alfred 5 确实有 fallback 机制读 workflow 目录的 chat 文件**（即使 plist 里 scriptfile 为空）。
-
-**W7.11 的"W7.10.1 触发 ReferenceError" 现象**: JXA 顶层 fn 引用 runMain 内 const, throw 后 Alfred 收不到 JSON 表现是「什么回复也没有」。说明 Alfred 确实在跑 Workflow/chat 文件, 且异常能传到 Alfred 入口（否则 Alfred 会默认 chat 还在跑出空白）。
-
-## CC 要做的
-
-按重要性排序：
-
-### P0: 验证 W7.11 在 Alfred 实际跑通
-- 让用户装新版 `.alfredworkflow` (620KB)
-- 用户发「**放 0.inbox/好好的时光-刘成.md**」测试
-- 确认 `0.inbox/好好的时光-刘成.md` 真存在
-- 如果不工作 — **stop**, 按 3 次补丁=方向错原则重新设计 (彻底回退到 pre-filter + local_agent.py)
-
-### P1: 沉淀 M3 推理模型限制
-- 写一条 [[feedback_m3_no_json_routing]] 记忆: M3 推理模型不擅长 JSON 路由, LLM 路由 task 改用 LLM synthesize content + chat script 手动调工具
-- 写一条 [[feedback_real_api_test_required]] 记忆: JXA 改动必须真实跑过（不是 mock, 不是 node --check, 是在 Alfred runtime 里）
-
-### P2: 排查 chat 主脚本加载机制（低优先级, 不阻塞 W7.11）
-- 临时 `mv Workflow/chat Workflow/chat.bak` → Alfred 触发 chat keyword → 看是报错还是能对话
-- 跑完**立即改回来**
-- 这条是历史未决问题, W7.8-W7.11 实际工作证明 fallback 存在, 排查只是补完知识
-
-### P3: 用户原话强调的「为什么这么复杂」反思
-- 当前链路 3 层（regex → LLM synthesize → tool execute）已经尽力简化
-- 如果用户仍嫌复杂, 终极方案是: pre-filter regex 跳 LLM, 全部走 local_agent.py NLP 解析（牺牲 LLM 的灵活性换简单性）
-- 但这条会牺牲 LLM 整理 content 的能力, 写入的笔记会很粗糙
-
-## 代码源唯一路径
-`/Users/DRLer/Desktop/cursor项目/alfred chat/`（用户原话强调"我之前让你改的就是这个文件夹下的文件"）。Alfred workflow 目录的副本是 Alfred 自动 sync 过去的，**不要在那里改**。
+---
 
 ## 关键文件
-- `Workflow/chat` (51766+ bytes) — JXA 主脚本
-  - line 768-799 附近: `handleModelToolUse` 入口的 `explicitWriteMatch` 早返回 (W7.11 新增)
-  - line 770 后: `buildSynthesizeMessages` 函数 (W7.11 新增)
-  - line 1324: `ensureFreshChat` (W5, OK)
-  - line 1352: `run(argv)` (W6 改过)
-  - line 1375: `runMain` 顶部调用 ensureFreshChat
-- `Workflow/info.plist` line 3096-3098 — `workflow_version` 字段, 当前 `W7.11 (回滚 W7.10 LLM 路由: M3 推理模型不擅 JSON 路由仍瞎说已写入; 改为 chat script 直接匹配「放/存 X.md」正则抓 path, LLM 只做 content synthesize, 然后手动调 obsidian_write)`
-- `Workflow/agent_tools/obsidian_write.py` — W2 已写好, 0.175s 冷启动直调 OK
-- `Workflow/agent_tools/web_search.py` — W7 新增, Tavily 工具
-- `Workflow/agent_tools/web_fetch.py` — W7 新增, baoyu-fetch 包装
-- `Workflow/agent_tools/__init__.py` — 已注册 web_search + web_fetch + obsidian_write (共 11 个工具)
-- `scripts/test_new_chat.py` — W5 测试, 8/8 过
-- `scripts/test_rename_recent.py` — W6 测试, 14/14 过
+- `Workflow/chat` (JXA 主脚本) — 关键函数:
+  - `mayNeedModelToolUse(text)` L684 — pre-filter 正则
+  - `decideToolUse(provider, typedQuery, timeoutSeconds)` L715 — LLM 路由器(已弃用,仅作为 fallback)
+  - `handleModelToolUse(...)` L768 — W7.11 入口加 `explicitWriteMatch` 早返回
+  - `buildSynthesizeMessages(...)` L782 — W7.11 新增,合成 obsidian 笔记内容
+  - `shouldFinalizeToolResult(toolCall, typedQuery)` L750
+  - `finalizeToolResult(...)` L759
+  - `runLocalAgentTool(toolCall)` L454 — 通过 local_agent.py --tool 调工具
+- `Workflow/agent_tools/obsidian_write.py` — 写工具(W2 注册),`handle_write` 验证过 0.175s 写完
+- `Workflow/agent_tools/web_search.py` — W7 新增,Tavily 工具(无依赖,stdlib urllib + retry 2 次)
+- `Workflow/agent_tools/web_fetch.py` — W7 新增,baoyu-fetch 包装
+- `Workflow/local_agent.py` L1377-1378 — `--tool` 入口, 调 `run_tool_call` → REGISTRY.dispatch
+- `Workflow/info.plist` L3098-3099 — `workflow_version` 字段,每次改完更新
+
+## 代码源唯一路径
+`/Users/DRLer/Desktop/cursor项目/alfred chat/`(用户原话强调"我之前让你改的就是这个文件夹下的文件")。Alfred workflow 目录的副本是 Alfred 自动 sync 过去的,**不要在那里改**。
+
+## 部署流程
+1. 改完代码 → bump `Workflow/info.plist` L3099 的 workflow_version 字符串
+2. 重新打包:
+   ```bash
+   cd "/Users/DRLer/Desktop/cursor项目/alfred chat"
+   python3 -c "import zipfile, os
+   with zipfile.ZipFile('Alfred Chat.alfredworkflow', 'w', zipfile.ZIP_STORED) as z:
+     for root, _, files in os.walk('Workflow'):
+       for f in files:
+         fp = os.path.join(root, f); z.write(fp, os.path.relpath(fp, 'Workflow'))"
+   ```
+3. git commit (用项目标准 commit format `<type>: <description>`,加 `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`)
+4. 告诉用户双击 `.alfredworkflow` 装新版
 
 ## 不要再做的事
-- **不要再在 decideToolUse 链路上打补丁** (W7.10 / W7.10.1 已证伪方向)
-- **不要再让 LLM 做 JSON 路由器** (M3 推理模型不擅长)
-- **不要再只跑 node --check** (查不出 scope bug)
-- **不要再写超过必要的探索代码** (用户原话)
-- **不要再 5 次补丁** — W7.9 + W7.10 + W7.10.1 + (W7.11 是方向反转不是补丁) 已经够多
-- **W7.11 是方向反转, 不是补丁; 如果它失败, stop 重新设计, 不是打 W7.12**
-- **不要把 baoyu-fetch 140 个 npm 包搬进 Workflow/** — 体量太大, 走 ~/.agents/skills/
+- **不要在写入 OB 链路上再打补丁**——W7.11 是方向反转的产物,再改就在错的方向上绕
+- **不要用 LLM 做 JSON 路由**——M3 推理模型不擅长,改用 chat script 正则 + LLM synthesize
+- **不要重新设计 ensureFreshChat 逻辑**(已 OK)
+- **不要花 30 分钟解析 plist 节点图**(已解完)
+- **不要把 baoyu-fetch 140 个 npm 包搬进 Workflow/**——体量太大,Alfred 用 `/usr/bin/python3` 跑,npm 环境走 `~/.agents/skills/` 是正解
+- **不要在没在 Alfred runtime 实测的情况下声称修复完成**——必须用户跑过才算数
 
 ## 未决问题 (open_questions)
-
-1. **W7.11 Alfred 端验证**: 待用户测试「放 0.inbox/...md」, 验证 obsidian_write 真的被调 + 文件真存在
-2. **chat 主脚本加载机制**: Alfred 5 plist 全 `scriptfile=''` 但能跑 20+ 轮, fallback 机制待确认 (P2, 不阻塞)
-3. **M3 推理模型限制**: 是否要把这条作为 feedback 永久沉淀? 待 Codex 决定
-4. **「为什么这么复杂」用户痛点**: 3 层链路是底线还是还能再简化? 见 P3
-5. **W7.11 的 LLM synthesize 失败 fallback**: 如果 content synthesize 失败, 现在 W7.11 直接 return "内容整理失败:xxx", 用户体验差。是否要 fallback 到 "把最近 5 条消息直接拼"?
+- **W7.11 仍未在 Alfred runtime 实测** — 用户装新版后还没跑过"放 0.inbox/..."。等用户验证。
+- **M3 LLM synthesize content 在 OB 写入时是否一定返回空** — 如果对话历史里完全无关,LLM 会返回空字符串,这时 chat script 已经 fallback 到 "对话历史里没有可以整理成笔记的内容,无法写入。" 但这种情况是 user 错用,不是 bug。
+- **W7.10 / W7.10.1 的 git commit 留着** — 应该 revert 还是保留?保留作为教训(写"共同教训"在 HANDOFF 里)。
+- **W7 web_search 的默认 max_results**: 当前写死 5,用户可能想改。Alfred Configure 加个选项?(低优先级)
+- **是否给 chat script 加更智能的 fallback** — 比如"在 OB 库里放一篇"无具体路径时,LLM 帮 user 拼一个合理路径?让 simplify 决定是否做。
 
 ## 交接记录 (handoff_log)
-- 2026-06-19 23:41  主控 agent → 接手 agent  `/handoff` 触发; W5 修复失败状态冻结
-- 2026-06-20 00:30  主控 agent  W6 修复 rename → 最近对话空白 bug, 14/14 + 8/8 测试过
-- 2026-06-20 10:30  主控 agent  Push v1.6.0 (e473abe) 到 origin/main, README 加 Demo 段
-- 2026-06-20 16:00  主控 agent  W7 新增 web_search + web_fetch 工具, 等用户配 TAVILY_API_KEY
-- 2026-06-21 12:00  主控 agent  W7.8 把蒂娜变 web agent (web_search 自动合成 + 反瞎掰约束), 验证「刘成是什么人」能搜出 3 个来源
-- 2026-06-21 12:30  主控 agent  W7.9 修 mayNeedModelToolUse 加 4 条口语写文件正则, 21/21 regex 测试过
-- 2026-06-21 13:00  主控 agent  W7.10 移除 L492 过宽 OB库 匹配 + decideToolUse 注入历史 + toolRouterPrompt 5 rule — 失败
-- 2026-06-21 13:15  主控 agent  W7.10.1 修 W7.10 scope bug — 失败, 方向本身错
-- 2026-06-21 13:30  主控 agent  **W7.11 方向反转**: 砍掉 LLM router, 改用 chat script 正则抓 path + LLM synthesize content + 手动调 obsidian_write, f673ed8 已 commit + .alfredworkflow 620KB 已打包。**等用户 Alfred 端验证**
+- 2026-06-20 16:00  主控 agent  W7 联网工具就绪,等用户配 Tavily key + push 决策
+- 2026-06-21 10:30  主控 agent  W7.7 反瞎掰约束 + Tavily retry 2 次,4 用例全过;W7.8 web_search 自动合成 + 多步工具说明;W7.9 mayNeedModelToolUse 加 4 条写文件动词正则;**W7.10 路由链路修复失败**(LLM 不返回 JSON);**W7.10.1 修 W7.10 scope bug 失败**(方向错);**W7.11 方向反转** — 用真实 API 跑 decideToolUse 发现 M3 推理模型不擅长 JSON 路由,改为 chat script 正则抓 path + LLM synthesize content + chat script 调 obsidian_write,11/11 regex 测试通过,等待用户实测验证。
