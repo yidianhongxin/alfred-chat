@@ -689,11 +689,6 @@
 	<false/>
 	<key>name</key>
 	<string>Alfred Chat</string>
-	<key>variables</key>
-	<dict>
-		<key>tavily_api_key</key>
-		<string></string>
-	</dict>
 	<key>objects</key>
 	<array>
 		<dict>
