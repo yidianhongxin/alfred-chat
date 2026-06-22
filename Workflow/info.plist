@@ -3096,6 +3096,6 @@ Override API endpoints via Workflow Environment Variables:
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W7.11 (回滚 W7.10 LLM 路由: M3 推理模型不擅 JSON 路由仍瞎说已写入; 改为 chat script 直接匹配「放/存 X.md」正则抓 path, LLM 只做 content synthesize, 然后手动调 obsidian_write)</string>
+	<string>W8+W9 final (W8 harness-first: 删 chat 脚本 W7 LLM 路由死代码 extractJsonObject/loadToolSchemas/toolRouterPrompt 共 62 行, 留 5 行注释; parse_intent 已有 30+ regex + 17 tools 真正接通 chat; W9 continuation 协议: pending_continuation.json 持久化 last_query+last_partial, isContinuationQuery 识别"go on/继续/接着说", runCompleteChat+readStream 在 isHangingPreamble 时自动存盘, 完整答时清 pending; 测试 scripts/test_w8_harness.py 19 项 + test_w9_continuation.py 5 项全过)</string>
 </dict>
 </plist>

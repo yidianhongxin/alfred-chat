@@ -83,6 +83,51 @@ def pending_path() -> Path:
     return cache_dir() / "pending_action.json"
 
 
+# [W9 continuation] 用户说"go on" / "继续"时,chat 读这个文件,
+# 把 last_query + last_assistant_partial 拼成新一轮 user message 再调 LLM。
+# 这是 Hermes _get_continuation_prompt 模式在 Alfred 上的本地实现
+# (Alfred 单轮流式 → 用文件持久化跨 rerun 状态)。
+def continuation_path() -> Path:
+    return data_dir() / "pending_continuation.json"
+
+
+def load_continuation() -> Optional[Dict[str, Any]]:
+    """读 pending continuation;不存在/过期/损坏返回 None。"""
+    p = continuation_path()
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    expires_at = data.get("expires_at")
+    if expires_at:
+        try:
+            if datetime.now() > datetime.fromisoformat(expires_at):
+                p.unlink(missing_ok=True)
+                return None
+        except (ValueError, TypeError):
+            pass
+    return data
+
+
+def save_continuation(last_query: str, last_assistant_partial: str, ttl_minutes: int = 30) -> None:
+    """存 pending continuation,默认 30 分钟过期。"""
+    p = continuation_path()
+    expires = datetime.now() + timedelta(minutes=ttl_minutes)
+    data = {
+        "last_query": last_query,
+        "last_assistant_partial": last_assistant_partial,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "expires_at": expires.isoformat(timespec="seconds"),
+    }
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def clear_continuation() -> None:
+    continuation_path().unlink(missing_ok=True)
+
+
 def action_log_path() -> Path:
     return data_dir() / "action_log.jsonl"
 
@@ -579,6 +624,30 @@ def parse_intent(query: str) -> Optional[Action]:
     match = re.match(r"^(?:追加|附加)(?:到)?(?:OB|Obsidian|ob)(?:库)?\s+(.+?)\s*(?:内容|正文)[:：]\s*([\s\S]+)$", text, re.I)
     if match:
         return Action("obsidian_append", path=match.group(1).strip(), content=match.group(2))
+
+    # [W8] 写 X 笔记/内容 到 0.inbox/Y.md (动词+标题提示+目的路径)
+    match = re.match(r"^写(?:一篇|个|份)?(.+?)(?:笔记|文章|内容)?(?:到|进|入|至)\s*(0\.inbox/[^\s？?。]+\.md)$", text, re.I)
+    if match:
+        return Action("obsidian_write", path=match.group(2).strip(), content="")
+
+    # [W8] 0.inbox/xxx.md 单独出现 + 动词 (写/存/放/录/塞)
+    match = re.match(r"^(?:写|存|放|录|塞|新建|创建|写入)\s+(0\.inbox/[^\s？?。]+\.md)$", text, re.I)
+    if match:
+        return Action("obsidian_write", path=match.group(1).strip(), content="")
+
+    # [W8] 简单 OB 写入 (无内容 — 让 LLM fallback 补充)
+    match = re.match(r"^(?:写|存|放|录|塞|新建|创建|写入)(?:一篇|一个|一份|到|进|给)?\s*(?:OB|Obsidian|ob|笔记)(?:库|文件)?\s*$", text, re.I)
+    if match:
+        # 路径缺失,让 chat 端 LLM 引导用户补路径
+        return Action("obsidian_status")  # 触发"OB 库状态"提示作为兜底
+    # [W8] 写/存/放 OB path.md (动词+OB+path 紧凑写法)
+    match = re.match(r"^(?:写|存|放|录|塞|新建|创建|写入)(?:一篇|一个|一份)?\s*(?:OB|Obsidian|ob|到OB|到Obsidian|到ob)\s+(\S+\.md)\s*$", text, re.I)
+    if match:
+        return Action("obsidian_write", path=match.group(1).strip(), content="")
+    # [W8] 把/将 对话 X 存到 OB 0.inbox/xxx.md (口语化) - 用单一 capture group
+    match = re.search(r"((?:0\.inbox|10\.DL|2\.AI-Garden|3\.wiki)/[^\s？?。]+\.md)", text, re.I)
+    if match and re.search(r"(?:存|放|录|塞|写入|写)", text):
+        return Action("obsidian_write", path=match.group(1).strip(), content="")
 
     obsidian_list_path = parse_obsidian_list_path(text)
     if obsidian_list_path:
@@ -1475,6 +1544,23 @@ def main() -> None:
         except Exception as exc:
             print(json.dumps({"status": "error", "assistant_text": str(exc), "footer": "失败"}, ensure_ascii=False))
         return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--continuation-get":
+        data = load_continuation()
+        print(json.dumps({"continuation": data}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 2 and sys.argv[1] == "--continuation-save":
+        # argv: --continuation-save <last_query> <last_assistant_partial>
+        save_continuation(sys.argv[2], sys.argv[3], ttl_minutes=30)
+        print(json.dumps({"status": "ok", "saved": True}, ensure_ascii=False))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--continuation-clear":
+        clear_continuation()
+        print(json.dumps({"status": "ok", "cleared": True}, ensure_ascii=False))
+        return
+
     query = sys.argv[1] if len(sys.argv) > 1 else ""
     trimmed = query.strip()
 

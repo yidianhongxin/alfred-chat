@@ -110,12 +110,70 @@ function isHangingPreamble(text) {
   return sentences.every(s => intentVerb.test(s))
 }
 
-const HANGING_PREAMBLE_NOTE = "（说明：我每条回复都是完整的，没有“回复后再继续执行”的能力，也无法联网搜索或运行 baoyu/外部脚本。请把链接或正文直接贴进来，我可帮你写入本地文件 / Obsidian 或做本地处理；要查实时新闻请告诉我已知事实，我基于它继续。）"
+const HANGING_PREAMBLE_NOTE = "" // W8: 已支持联网,无需"无法联网"提示
 
 function withHangingPreambleFallback(text) {
   if (!isHangingPreamble(text)) return text
   const base = (text || "").trim()
   return base ? `${base}\n\n${HANGING_PREAMBLE_NOTE}` : HANGING_PREAMBLE_NOTE
+}
+
+// [W9 continuation] 用户说"go on" / "继续" / "接着说" — 读 pending 拼成新一轮 user message
+function isContinuationQuery(text) {
+  const t = (text || "").trim()
+  // 严格匹配"go on"作整个词, 避免 "go online" 等误中
+  return /^(?:go on|continue|please continue|go ahead)\b/i.test(t)
+    || /^(继续|接着说|接着|继续说)$/.test(t)
+}
+
+function handleContinuation(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds) {
+  // 1. 读 pending
+  const contResult = runLocalAgentWithArguments(["--continuation-get"])
+  const continuation = contResult && contResult.continuation
+  if (!continuation) {
+    return responseWithConversation(chatFile, typedQuery,
+      "没有待续的对话(可能已完成或已过期)。",
+      "无 pending")
+  }
+
+  // 2. 拼 user message: 上一轮 query + 上一轮 partial + 用户 go on 指令
+  const lastQuery = continuation.last_query || ""
+  const lastPartial = continuation.last_assistant_partial || ""
+  const continuePrompt = [
+    "【W9 continuation · 用户请求续答】",
+    "上一轮用户问题:",
+    lastQuery,
+    "",
+    "你上一轮(未完成)的回答:",
+    lastPartial,
+    "",
+    "现在请接着上一轮继续回答 — 不要重复已完成的部分,直接接续。"
+  ].join("\n")
+
+  // 3. 把 continue_prompt 作为新一轮 user message, 调 LLM
+  appendChat(chatFile, { role: "user", content: continuePrompt })
+  const session = readSession(chatFile)
+  const ongoingMessages = session.messages
+  const contextChat = ongoingMessages.slice(-(parseInt(envVar("max_context")) || 40))
+
+  if (provider.apiStyle === "anthropic") {
+    const result = runCompleteChat(chatFile, "[continuation]", provider, systemPrompt, contextChat, timeoutSeconds)
+    // 续答成功,清 pending
+    runLocalAgentWithArguments(["--continuation-clear"])
+    return result
+  }
+
+  // 流式路径(startStream): 由 caller 决定是否清 pending
+  // 这里只返回触发 rerun + streaming
+  const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
+  const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
+  startStream(provider.endpoint, provider.apiKey, provider.model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, provider.supportsThinkingParam)
+  return JSON.stringify({
+    rerun: 0.1,
+    variables: { streaming_now: true, stream_marker: "1" },
+    response: markdownSession({ title: session.title, messages: ongoingMessages }),
+    behaviour: { scroll: "end" }
+  })
 }
 
 function formatUserLabel(labels) {
@@ -489,10 +547,13 @@ function looksLikeLocalAgentQuery(text) {
     /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(trimmed) ||
     /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(trimmed) ||
     /^搜索(?:OB|Obsidian|ob)/i.test(trimmed) ||
-    // 去掉 /(?:OB|Obsidian|ob)库/ 的过宽匹配：之前会让"写入ob库"直接走本地 NLP agent,
-    // 完全绕过 LLM 工具路由,导致 LLM 看不到对话历史瞎说"先确认再写入"却根本没调 obsidian_write.
-    // 改由 mayNeedModelToolUse + decideToolUse 路由处理 (W7.10)
-    /(?:新建|创建|写入)(?:一篇|一个|一份|到)?\s*(?:0\.inbox|10\.DL)/i.test(trimmed) ||
+    // [W8 harness-first] 反转 W7.10 决策:OB 写入 query 重新走 local_agent harness
+    // (W7.10 怕 LLM 看不到对话历史瞎说"先确认再写入" — 但实测 M3 推理模型在这步瞎说率 100%,
+    //  走 LLM 反而绕路。W1 减法版做的 parse_intent harness 才是正解,只是 chat 之前没接上)
+    /(?:新建|创建|写入|写|存|放|录|塞|追加)(?:一篇|一个|一份|到|进|给)?\s*(?:0\.inbox|10\.DL|2\.AI-Garden|3\.wiki|OB|Obsidian|ob)/i.test(trimmed) ||
+    /(?:0\.inbox|10\.DL|2\.AI-Garden|3\.wiki)\/[^\s？?。]+\.md/i.test(trimmed) ||
+    /(?:新建|创建|写入|写|存|放|录|塞|追加).*(?:OB|Obsidian|ob)(?:库|笔记|文件)?/i.test(trimmed) ||
+    /(?:OB|Obsidian|ob)(?:库|笔记|文件)?.*(?:新建|创建|写入|写|存|放|录|塞|追加)/i.test(trimmed) ||
     /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(trimmed) ||
     /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(trimmed) ||
     /(?:翻阅|回顾|随便读|随机读|最近|近\s*\d+\s*(?:天|篇)).*(?:日记|OB|Obsidian|ob)/i.test(trimmed) ||
@@ -621,67 +682,10 @@ function runChatCompletion(provider, payload, timeoutSeconds) {
   }
 }
 
-function extractJsonObject(text) {
-  const trimmed = (text || "").trim()
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const candidate = fenced ? fenced[1].trim() : trimmed
-  const start = candidate.indexOf("{")
-  const end = candidate.lastIndexOf("}")
-  if (start < 0 || end < start) return null
-
-  try {
-    return JSON.parse(candidate.slice(start, end + 1))
-  } catch {
-    return null
-  }
-}
-
-function loadToolSchemas() {
-  if (loadToolSchemas._cache) return loadToolSchemas._cache
-  const result = runLocalAgentWithArguments(["--tool-schema"])
-  if (!result || !result.handled) {
-    loadToolSchemas._cache = []
-    return loadToolSchemas._cache
-  }
-  try {
-    const schemas = JSON.parse(result.assistant_text || "[]")
-    loadToolSchemas._cache = Array.isArray(schemas) ? schemas : []
-    return loadToolSchemas._cache
-  } catch (e) {
-    loadToolSchemas._cache = []
-    return loadToolSchemas._cache
-  }
-}
-
-function toolRouterPrompt() {
-  return [
-    "你是 Alfred Chat 的工具路由器。判断用户请求是否需要调用本地工具。",
-    "只返回 JSON，不要解释，不要 Markdown。",
-    "如果不需要工具，返回 {\"tool\":\"none\",\"args\":{}}。",
-    "需要外部信息（你不知道 / 用户问实时/最新/最近/刚出/网络上/搜一下/查一下/百度/谷歌/上网/搜索）→ web_search(query=用户的问句)",
-    "用户提供 URL 想看完整内容（「这个页面讲什么」/「帮我读下」）→ web_fetch(url=那个 URL)",
-    "拿到搜索结果后,如果只是标题/链接不够,可以再调 web_fetch 抓具体页面深挖。",
-    "用户要求读写本地文件、Obsidian、任务、记忆、白名单命令、撤销时,按对应 obsidian_*/read_file/write_file/reminder_* 工具走。",
-    "纯写作/翻译/解释概念/你已经能从训练数据答出的问题 → 返回 none,不要硬塞工具。",
-    `${loadToolSchemas().map(s => {
-      const params = s.parameters && s.parameters.properties ?
-        Object.entries(s.parameters.properties).map(([k, v]) => `${k}${s.parameters.required && s.parameters.required.includes(k) ? "" : "?"}:${v.type || "any"}`).join(", ") :
-        ""
-      return `- ${s.name} {${params}}${s.description ? " — " + s.description : ""}`
-    }).join("\n")}`,
-    "路径规则：用户说桌面就是 Desktop；裸文件名如 123.txt 默认桌面。",
-    "OB 规则：用户问能否读取 OB 库、翻阅日记、读最近日记、读写 OB 文件，都应调用对应 obsidian_* 工具。",
-    "示例：你能读到OB库的内容么？ -> {\"tool\":\"obsidian_status\",\"args\":{}}",
-    "示例：翻阅一下OB库里的日记 -> {\"tool\":\"obsidian_diary_browse\",\"args\":{}}",
-    "示例：读下最近2天日记 -> {\"tool\":\"obsidian_diary_recent\",\"args\":{\"count\":2}}",
-    "示例：列出0.inbox里的文章 -> {\"tool\":\"obsidian_list\",\"args\":{\"path\":\"0.inbox\"}}",
-    "示例：写入OB 0.inbox/test.md 内容：hello -> {\"tool\":\"obsidian_write\",\"args\":{\"path\":\"0.inbox/test.md\",\"content\":\"hello\"}}",
-    "示例：读下ob库今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
-    "示例：帮我总结今日日记 -> {\"tool\":\"obsidian_daily_read\",\"args\":{}}",
-    "示例：早上9点30提醒我打卡 -> {\"tool\":\"none\",\"args\":{}}（本地直接解析，不走模型）",
-    "示例：明天下午3点提醒开会 -> reminder_add 由本地解析"
-  ].join("\n")
-}
+// [W8 harness-first] 删除 W7 LLM 路由附属物 (extractJsonObject / loadToolSchemas / toolRouterPrompt)
+// — W7 整套 LLM 路由器已被 harness 接管,这三函数无 caller。
+// mayNeedModelToolUse 保留 — 它是预过滤,告诉 chat 何时用工具 (虽然工具已转到 harness,语义变了,
+// 但保留不影响行为,改天再清)。
 
 function mayNeedModelToolUse(text) {
   if (looksLikeSkillifyQuery(text)) return false
@@ -712,184 +716,11 @@ function mayNeedModelToolUse(text) {
     /https?:\/\//i.test(text)
 }
 
-function decideToolUse(provider, typedQuery, timeoutSeconds) {
-  const result = runChatCompletion(provider, {
-    model: provider.model,
-    messages: [
-      { role: "system", content: toolRouterPrompt() },
-      { role: "user", content: typedQuery }
-    ],
-    stream: false,
-    temperature: 0
-  }, Math.min(timeoutSeconds, 10))
-
-  if (result.error) return null
-
-  const parsed = extractJsonObject(result.content)
-  if (!parsed || !parsed.tool || parsed.tool === "none") return null
-  if (!parsed.args) parsed.args = {}
-  return parsed
-}
-
-function shouldFinalizeToolResult(toolCall, typedQuery) {
-  const tool = toolCall?.tool || ""
-  // web_search / web_fetch 永远合成: LLM 拿到原始 Tavily 输出/网页 markdown 后整理成干净答案
-  if (["web_search", "web_fetch"].includes(tool)) return true
-  // 其他工具需要用户明确说"总结/分析"才合成,否则直接显示原始结果
-  return /总结|分析|解释|提取|根据|帮我|整理成|改写/i.test(typedQuery) &&
-    ["read_file", "obsidian_daily_read", "obsidian_diary_browse", "obsidian_diary_recent", "obsidian_search", "obsidian_read", "obsidian_list", "obsidian_status", "session_search", "list_dir", "shell"].includes(tool)
-}
-
-function finalizeToolResult(provider, systemPrompt, typedQuery, toolResultText, timeoutSeconds) {
-  const result = runChatCompletion(provider, {
-    model: provider.model,
-    messages: [
-      { role: "system", content: systemPrompt || "你是一个有帮助的 AI 助手。" },
-      { role: "user", content: [
-        `用户原始请求：${typedQuery}`,
-        "",
-        "工具结果（原始）：",
-        toolResultText,
-        "",
-        "【合成要求 · 务必遵守】",
-        "1. 工具结果若说「未找到/0 条/网络错误/失败」,直接告诉用户搜不到/失败,不要用训练数据补全。",
-        "2. 工具结果若与问题不直接相关,明确说「搜索结果中未找到 X 的相关信息」,不要强行套用。",
-        "3. 引用工具结果时显式标注来源（用「Tavily 搜索结果显示…」「搜索结果中提到…」）,不要把搜索结果伪装成「我从公开资料里看到…」这种凭空背书。",
-        "4. 整理成简洁的最终答案：1-3 段,关键事实用【】或加粗突出,带 1-2 条原始链接方便用户验证。",
-        "5. 不要复述工具结果的 markdown 格式（标题/列表/编号）,用自然语言重新组织。"
-      ].join("\n") }
-    ],
-    stream: false
-  }, Math.min(timeoutSeconds, 30))
-
-  return result.error ? `工具已执行，但模型总结失败：${result.error}\n\n${toolResultText}` : result.content
-}
-
-// [W7.11] 「写入 X.md」专用: 注入历史 + 让 LLM 把历史里相关的内容整理成 obsidian 笔记.
-function buildSynthesizeMessages(chatFile, typedQuery, targetPath) {
-  const sess = readSession(chatFile)
-  const recent = (sess && Array.isArray(sess.messages)) ? sess.messages.slice(-10) : []
-  const history = recent
-    .filter(m => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim().length > 0)
-    .map(m => ({ role: m.role, content: m.content.length > 2500 ? m.content.slice(-2500) : m.content }))
-
-  const systemPrompt = [
-    "你是 Alfred Chat 的内容整理助手。",
-    "把对话历史里与本次写入请求相关的内容整理成一篇 obsidian 笔记(纯 markdown 文本)。",
-    "要求:",
-    "1. 顶部加 YAML frontmatter 块:",
-    "   ---",
-    "   title: <笔记标题>",
-    "   created: <今天的 YYYY-MM-DD>",
-    "   urls:",
-    "     - <参考链接 1>",
-    "     - <参考链接 2>",
-    "   ---",
-    "2. 正文用清晰的小标题分段(## 一级 / ### 二级),关键事实用【】或加粗突出。",
-    "3. 末尾「## 参考来源」列出历史里出现过的所有 URL。",
-    "4. 只返回整理后的 markdown 文本本身,不要 JSON,不要 ``` 围栏,不要额外解释。",
-    "5. 如果对话历史里没有任何与本次请求相关的内容(空 / 完全无关),只返回空字符串。"
-  ].join("\n")
-
-  return [
-    { role: "system", content: systemPrompt },
-    ...history,
-    { role: "user", content: `把上面对话历史里相关的内容整理成 obsidian 笔记,目标路径：${targetPath}\n用户原始指令：${typedQuery}` }
-  ]
-}
-
-function handleModelToolUse(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds) {
-  if (!mayNeedModelToolUse(typedQuery.trim())) return null
-
-  // [W7.11] 「放/存/保存/录入/写 [path].md」直接拼 obsidian_write 调用 —
-  // 摆脱 LLM 路由器 (M3 推理模型不擅 JSON 路由) + 摆脱 user 误判.
-  // 路径从 user query 正则抓, content 由 LLM 从对话历史 synthesize 一次.
-  const explicitWriteMatch = typedQuery.match(
-    /(?:放|放入|存|存到|存进|存为|存入|保存|落到|录入|加到|加进|塞|写入|写到|新建|创建)\s*(?:一篇|一个|一份|到|进|入|给|在)?\s*((?:0\.inbox|10\.DL|2\.AI-Garden|\d+\..+|[一-鿿\w\- ]+)\/[^\s？?。]+\.md)/i
-  ) || typedQuery.match(
-    /((?:0\.inbox|10\.DL|2\.AI-Garden|\d+\..+|[一-鿿\w\- ]+)\/[^\s？?。]+\.md)\s*(?:放|放入|存|存到|存进|存为|存入|保存|落到|录入|加到|加进|塞|写入|写到|新建|创建)/i
-  )
-  if (explicitWriteMatch) {
-    const targetPath = explicitWriteMatch[1].trim()
-    const synthResult = runChatCompletion(provider, {
-      model: provider.model,
-      messages: buildSynthesizeMessages(chatFile, typedQuery, targetPath),
-      stream: false,
-      temperature: 0.2
-    }, Math.min(timeoutSeconds, 30))
-    if (synthResult.error) {
-      return responseWithConversation(chatFile, typedQuery.trim(),
-        `内容整理失败：${synthResult.error}`, "合成失败")
-    }
-    const content = (synthResult.content || "").trim()
-    if (!content) {
-      return responseWithConversation(chatFile, typedQuery.trim(),
-        "对话历史里没有可以整理成笔记的内容,无法写入。", "无可写内容")
-    }
-    const writeResult = runLocalAgentTool({ tool: "obsidian_write", args: { path: targetPath, content } })
-    if (!writeResult || !writeResult.handled) {
-      return responseWithConversation(chatFile, typedQuery.trim(),
-        "obsidian_write 调用失败,未真正写入。", "写入失败")
-    }
-    if (writeResult.status !== "success") {
-      return responseWithConversation(chatFile, typedQuery.trim(),
-        writeResult.assistant_text || "obsidian_write 返回失败状态", "写入失败")
-    }
-    return responseWithConversation(chatFile, typedQuery.trim(),
-      writeResult.assistant_text, writeResult.footer || writeResult.assistant_text)
-  }
-
-  const maxIterations = parseInt(envVar("max_tool_iterations")) || 5
-  let toolCall = decideToolUse(provider, typedQuery, timeoutSeconds)
-  if (!toolCall) return null
-
-  let iterations = 0
-  let combinedText = ""
-  let lastResult = null
-  let lastTool = toolCall.tool
-
-  while (toolCall && iterations < maxIterations) {
-    const result = runLocalAgentTool(toolCall)
-    if (!result || !result.handled) return null
-
-    iterations++
-    lastResult = result
-    lastTool = toolCall.tool
-    combinedText = combinedText ?
-      `${combinedText}\n\n[${toolCall.tool}]\n${result.assistant_text || ""}` :
-      (result.assistant_text || "本地工具已执行")
-
-    if (result.status !== "success") break
-
-    const followUpPrompt = [
-      `用户原始请求：${typedQuery}`,
-      `已完成工具：${toolCall.tool}`,
-      `工具结果：${result.assistant_text || ""}`,
-      "若还需要调用其他本地工具，只返回 JSON tool call；否则返回 {\"tool\":\"none\",\"args\":{}}"
-    ].join("\n")
-
-    const nextCall = decideToolUse(provider, followUpPrompt, timeoutSeconds)
-    if (!nextCall || nextCall.tool === "none") break
-    toolCall = nextCall
-  }
-
-  const hitLimit = iterations >= maxIterations && toolCall && toolCall.tool !== "none"
-  const toolText = combinedText || "本地工具已执行"
-  const assistantText = shouldFinalizeToolResult({ tool: lastTool }, typedQuery) && lastResult?.status === "success" ?
-    finalizeToolResult(provider, systemPrompt, typedQuery, toolText, timeoutSeconds) :
-    toolText
-
-  const footer = hitLimit ?
-    `已达工具迭代上限（${maxIterations}）` :
-    (lastResult?.footer || assistantText)
-
-  return responseWithConversation(
-    chatFile,
-    typedQuery.trim(),
-    assistantText,
-    footer
-  )
-}
+// ─── W8 (harness-first): 删除 W7 整条 LLM 路由 ───
+// - decideToolUse / buildSynthesizeMessages / handleModelToolUse 全部砍掉
+// - 改由 handleLocalFileControl → local_agent.py parse_intent 接管
+// - mayNeedModelToolUse / shouldFinalizeToolResult 保留(给 web_search/web_fetch 用)
+// - 联网能力由 LLM 在 fallback 路径自动触发
 
 function providerRequiresApiKey(provider) {
   return provider.provider !== "ollama"
@@ -1026,6 +857,19 @@ function runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextCh
   maybeTriggerBackgroundReview(chatFile)
   maybeIndexSession()
 
+  // [W9 continuation] anthropic 路径下,如果 LLM 答到一半就停,存 pending
+  if (isHangingPreamble(assistantText)) {
+    try {
+      runLocalAgentWithArguments([
+        "--continuation-save",
+        typedQuery || "",
+        assistantText
+      ])
+    } catch {}
+  } else {
+    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
+  }
+
   const session = readSession(chatFile)
   return JSON.stringify({
     response: markdownSession(session, false),
@@ -1151,6 +995,25 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
   deleteFile(pidStreamFile)
   maybeTriggerBackgroundReview(chatFile)
   maybeIndexSession()
+
+  // [W9 continuation] 如果 LLM 答到一半就停 (isHangingPreamble),
+  // 把 last_query (从 session 最后一条 user msg 取) + last_partial 存盘
+  if (finishReason === "stop" && isHangingPreamble(responseText)) {
+    try {
+      const sessionForCont = readSession(chatFile)
+      const msgsForCont = sessionForCont.messages || []
+      const lastUserMsg = msgsForCont.filter(m => m.role === "user").slice(-1)[0]
+      const lastQueryForCont = lastUserMsg ? (lastUserMsg.content || "") : ""
+      runLocalAgentWithArguments([
+        "--continuation-save",
+        lastQueryForCont,
+        responseText
+      ])
+    } catch {}
+  } else {
+    // LLM 答完整了,清 pending (避免上轮的 stale pending 影响下一轮)
+    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
+  }
 
   const footerText = (function() {
     switch (finishReason) {
@@ -1519,6 +1382,19 @@ function runMain(argv) {
   const localControlResponse = handleLocalFileControl(chatFile, typedQuery)
   if (localControlResponse) return localControlResponse
 
+  // [W9 continuation] 用户说"go on" / "继续" / "接着说" — 读 pending 续跑
+  if (isContinuationQuery(typedQuery)) {
+    const providerForCont = resolveProvider()
+    const sysPromptForCont = composeSystemPrompt(configuredSystemPrompt, typedQuery)
+    if (providerRequiresApiKey(providerForCont) && (!providerForCont.apiKey || providerForCont.apiKey.length === 0)) {
+      return JSON.stringify({
+        response: `**${providerForCont.providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
+        behaviour: { response: "replacelast", scroll: "end" }
+      })
+    }
+    return handleContinuation(chatFile, typedQuery, providerForCont, sysPromptForCont, timeoutSeconds)
+  }
+
   const provider = resolveProvider()
   const systemPrompt = composeSystemPrompt(configuredSystemPrompt, typedQuery)
 
@@ -1529,8 +1405,6 @@ function runMain(argv) {
     })
   }
 
-  const modelToolResponse = handleModelToolUse(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds)
-  if (modelToolResponse) return modelToolResponse
 
   const appendQuery = { role: "user", content: typedQuery }
   const ongoingMessages = session.messages.concat(appendQuery)
