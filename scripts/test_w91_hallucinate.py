@@ -23,24 +23,54 @@ def is_hallucinated(text: str) -> bool:
 
 
 def extract(text: str):
+    """Mirror JXA extractHallucinatedToolCalls: 支持 JSON + XML 风格。"""
     out = []
-    paired = re.findall(r"<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>", text or "", re.I)
-    for body in paired:
-        m = re.search(r"\{[\s\S]*\}", body)
-        if not m:
+    if not text:
+        return out
+
+    block_re = re.compile(r"<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>", re.I)
+    for block_match in block_re.finditer(text):
+        body = block_match.group(1) or ""
+
+        # 1) JSON 风格
+        json_objs = re.findall(r"\{(?:[^{}]|\{[^{}]*\})*\}", body)
+        for o in json_objs:
+            try:
+                obj = json.loads(o)
+                if obj and (obj.get("name") or obj.get("tool")):
+                    out.append({
+                        "name": obj.get("name") or obj.get("tool"),
+                        "arguments": obj.get("arguments") or obj.get("args") or {},
+                    })
+            except Exception:
+                pass
+        if out:
             continue
-        try:
-            out.append(json.loads(m.group(0)))
-        except Exception:
-            pass
-    if not out:
-        blob = re.search(r"<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>", text or "", re.I)
-        if blob:
-            for o in re.findall(r"\{(?:[^{}]|\{[^{}]*\})*\}", blob.group(1)):
-                try:
-                    out.append(json.loads(o))
-                except Exception:
-                    pass
+
+        # 2) XML 风格
+        for inv in re.finditer(r"<\s*invoke\s+[^>]*name\s*=\s*[\"']([^\"']+)[\"'][^>]*>([\s\S]*?)<\s*\/\s*invoke\s*>", body, re.I):
+            name = (inv.group(1) or "").strip()
+            inner = inv.group(2) or ""
+            if not name:
+                continue
+            args = {}
+            for p in re.finditer(r"<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>", inner):
+                key, value = p.group(1), (p.group(2) or "").strip()
+                if key and value and key not in args:
+                    args[key] = value
+            out.append({"name": name, "arguments": args})
+
+        # 3) 容错: 单独的 invoke name
+        if not out:
+            loose = re.search(r"<\s*invoke\s+[^>]*name\s*=\s*[\"']([^\"']+)[\"']", body, re.I)
+            if loose:
+                name = loose.group(1).strip()
+                args = {}
+                for p in re.finditer(r"<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>", body):
+                    key, value = p.group(1), (p.group(2) or "").strip()
+                    if key and value and key not in args:
+                        args[key] = value
+                out.append({"name": name, "arguments": args})
     return out
 
 
@@ -142,6 +172,65 @@ def test_extract_with_prefix_text():
     print("  ✓ text around toolcall doesn't break parse")
 
 
+def test_extract_xml_single():
+    """M3 实际输出风格: <invoke name="web_search"><query>...</query></invoke>"""
+    print("--- test_extract_xml_single ---")
+    text = '<tool_call>\n<invoke name="web_search">\n<query>好好的时光 电视剧 剧情简介</query>\n</invoke>\n</toolcall>'
+    out = extract(text)
+    print(f"  → {out}")
+    assert len(out) == 1, f"Expected 1, got {len(out)}"
+    assert out[0]["name"] == "web_search"
+    assert out[0]["arguments"]["query"] == "好好的时光 电视剧 剧情简介"
+    print("  ✓ XML single tool call parsed")
+
+
+def test_extract_xml_multiple():
+    """M3 实际输出风格: 多个 invoke 同包在一个 toolcall 内"""
+    print("--- test_extract_xml_multiple ---")
+    text = '''<tool_call>
+<invoke name="web_search">
+<query>Broadcom AVGO Q4 2024 earnings AI revenue</query>
+</invoke>
+<invoke name="web_search">
+<query>Marvell MRVL Q3 fiscal 2025 earnings</query>
+</invoke>
+<invoke name="web_search">
+<query>Astera Labs ALAB Q3 2024 earnings</query>
+</invoke>
+</toolcall>'''
+    out = extract(text)
+    print(f"  → {len(out)} calls: {[c['name'] for c in out]}")
+    assert len(out) == 3
+    assert all(c["name"] == "web_search" for c in out)
+    assert out[0]["arguments"]["query"].startswith("Broadcom")
+    assert out[1]["arguments"]["query"].startswith("Marvell")
+    assert out[2]["arguments"]["query"].startswith("Astera")
+    print("  ✓ XML multiple tool calls parsed")
+
+
+def test_extract_xml_with_prefix_text():
+    """M3 在 <toolcall> 前后经常有中文引导语"""
+    print("--- test_extract_xml_with_prefix_text ---")
+    text = '我先查一下这部电视剧的资料。\n<tool_call>\n<invoke name="web_search">\n<query>好好的时光 电视剧</query>\n</invoke>\n</toolcall>'
+    out = extract(text)
+    print(f"  → {out}")
+    assert len(out) == 1
+    assert out[0]["arguments"]["query"] == "好好的时光 电视剧"
+    print("  ✓ XML with surrounding text parsed")
+
+
+def test_extract_xml_websearch_no_underscore():
+    """M3 偶尔用 websearch (无下划线) 变体"""
+    print("--- test_extract_xml_websearch_no_underscore ---")
+    text = '<tool_call>\n<invoke name="websearch">\n<query>x</query>\n</invoke>\n</toolcall>'
+    out = extract(text)
+    print(f"  → {out}")
+    assert len(out) == 1
+    assert out[0]["name"] == "websearch"
+    # run 阶段会 normalize 到 web_search
+    print("  ✓ XML with websearch (no underscore) parsed")
+
+
 def test_run_tool_call_web_search():
     print("--- test_run_tool_call_web_search ---")
     # 模拟 M3 输出
@@ -181,6 +270,14 @@ if __name__ == "__main__":
     test_extract_malformed_returns_empty()
     print()
     test_extract_with_prefix_text()
+    print()
+    test_extract_xml_single()
+    print()
+    test_extract_xml_multiple()
+    print()
+    test_extract_xml_with_prefix_text()
+    print()
+    test_extract_xml_websearch_no_underscore()
     print()
     test_run_tool_call_web_search()
     print()

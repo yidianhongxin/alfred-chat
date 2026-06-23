@@ -127,32 +127,76 @@ function isHallucinatedToolCall(text) {
   return /<\s*tool[_]?call\b/i.test(text || "")
 }
 
-// 解析 M3 输出的 <toolcall>{"name":"web_search","arguments":{...}}</toolcall>
+// 解析 M3 输出的 tool call。两种风格:
+//   JSON:    <toolcall>{"name":"web_search","arguments":{"query":"..."}}</toolcall>
+//   XML:     <toolcall>
+//              <invoke name="web_search">
+//                <query>...</query>
+//              </invoke>
+//            </toolcall>
 // 返回 [{name, arguments}] 数组 (可能 0..N 个)
 function extractHallucinatedToolCalls(text) {
   const out = []
   if (!text) return out
-  // 先尝试成对 <toolcall>...</toolcall>
-  const paired = [...text.matchAll(/<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/gi)]
-  for (const m of paired) {
-    const body = (m[1] || "").trim()
-    // 提取第一个 { ... } JSON 对象 (容错)
-    const objMatch = body.match(/\{[\s\S]*\}/)
-    if (!objMatch) continue
-    try {
-      out.push(JSON.parse(objMatch[0]))
-    } catch {}
-  }
-  if (out.length > 0) return out
 
-  // 容错: 多个相邻 <toolcall>{...}{...}</toolcall> 没分别包
-  const blob = text.match(/<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/i)
-  if (blob) {
-    const body = blob[1]
-    const objRe = /\{(?:[^{}]|\{[^{}]*\})*\}/g
-    const objs = body.match(objRe) || []
-    for (const o of objs) {
-      try { out.push(JSON.parse(o)) } catch {}
+  // 找 <toolcall>...</toolcall> 块 (任意大小写, 任意属性)
+  const blockRe = /<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/gi
+  const blocks = [...text.matchAll(blockRe)]
+
+  for (const blockMatch of blocks) {
+    const body = blockMatch[1] || ""
+
+    // --- 1) JSON 风格: 多个相邻 {name, arguments} 块 ---
+    const jsonRe = /\{(?:[^{}]|\{[^{}]*\})*\}/g
+    const jsonObjs = body.match(jsonRe) || []
+    for (const o of jsonObjs) {
+      try {
+        const obj = JSON.parse(o)
+        if (obj && (obj.name || obj.tool)) {
+          out.push({
+            name: obj.name || obj.tool,
+            arguments: obj.arguments || obj.args || {}
+          })
+        }
+      } catch {}
+    }
+    if (out.length > 0) continue
+
+    // --- 2) XML 风格: <invoke name="X">...<param>value</param>...</invoke> ---
+    const invokeRe = /<\s*invoke\s+[^>]*name\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\s*\/\s*invoke\s*>/gi
+    for (const inv of body.matchAll(invokeRe)) {
+      const name = (inv[1] || "").trim()
+      const inner = inv[2] || ""
+      if (!name) continue
+
+      // 提取内层 <key>value</key> 参数 (key 必须成对同名)
+      const args = {}
+      const paramRe = /<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/g
+      for (const p of inner.matchAll(paramRe)) {
+        const key = p[1]
+        const value = (p[2] || "").trim()
+        if (key && value && !(key in args)) {
+          args[key] = value
+        }
+      }
+      out.push({ name: name, arguments: args })
+    }
+
+    // --- 3) 容错: 单个 invoke 没闭合, 只 match name 属性 ---
+    if (out.length === 0) {
+      const looseName = body.match(/<\s*invoke\s+[^>]*name\s*=\s*["']([^"']+)["']/i)
+      if (looseName) {
+        const args = {}
+        const paramRe2 = /<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/g
+        for (const p of body.matchAll(paramRe2)) {
+          const key = p[1]
+          const value = (p[2] || "").trim()
+          if (key && value && !(key in args)) {
+            args[key] = value
+          }
+        }
+        out.push({ name: looseName[1].trim(), arguments: args })
+      }
     }
   }
   return out
