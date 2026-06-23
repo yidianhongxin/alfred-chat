@@ -118,6 +118,124 @@ function withHangingPreambleFallback(text) {
   return base ? `${base}\n\n${HANGING_PREAMBLE_NOTE}` : HANGING_PREAMBLE_NOTE
 }
 
+// [W9.1] M3 推理模型在没 tool 支持时, 会 mimic 训练数据输出 <toolcall>...</toolcall> 文本。
+// 这不是真工具调用,但 chat 脚本之前直接当 assistant 文本存盘 → 用户看 hallucinate + 答空。
+// 这里 detect + 真调 + 重答, 解决:
+//   1) M3 hallucinate bug — 用户看到真搜索结果而非 <toolcall> JSON
+//   2) 联网能力兜底 — 就算 system prompt 没强调"用搜索", M3 自带的 web_search 幻觉也被真跑
+function isHallucinatedToolCall(text) {
+  return /<\s*tool[_]?call\b/i.test(text || "")
+}
+
+// 解析 M3 输出的 <toolcall>{"name":"web_search","arguments":{...}}</toolcall>
+// 返回 [{name, arguments}] 数组 (可能 0..N 个)
+function extractHallucinatedToolCalls(text) {
+  const out = []
+  if (!text) return out
+  // 先尝试成对 <toolcall>...</toolcall>
+  const paired = [...text.matchAll(/<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/gi)]
+  for (const m of paired) {
+    const body = (m[1] || "").trim()
+    // 提取第一个 { ... } JSON 对象 (容错)
+    const objMatch = body.match(/\{[\s\S]*\}/)
+    if (!objMatch) continue
+    try {
+      out.push(JSON.parse(objMatch[0]))
+    } catch {}
+  }
+  if (out.length > 0) return out
+
+  // 容错: 多个相邻 <toolcall>{...}{...}</toolcall> 没分别包
+  const blob = text.match(/<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/i)
+  if (blob) {
+    const body = blob[1]
+    const objRe = /\{(?:[^{}]|\{[^{}]*\})*\}/g
+    const objs = body.match(objRe) || []
+    for (const o of objs) {
+      try { out.push(JSON.parse(o)) } catch {}
+    }
+  }
+  return out
+}
+
+// 真跑 M3 hallucinate 的工具 (通过 local_agent --tool)
+// 返回 [{name, ok, text}]
+function runHallucinatedToolCalls(toolCalls) {
+  const results = []
+  for (const tc of toolCalls || []) {
+    const rawName = (tc && (tc.name || tc.tool)) || ""
+    const name = rawName.toLowerCase()
+    const args = (tc && (tc.arguments || tc.args)) || {}
+
+    let localTool = null
+    if (name === "web_search" || name === "websearch" || name === "search") {
+      localTool = { tool: "web_search", args: { query: args.query || args.q || "" } }
+    } else if (name === "web_fetch" || name === "webfetch" || name === "fetch") {
+      localTool = { tool: "web_fetch", args: { url: args.url || "" } }
+    }
+
+    if (!localTool) {
+      results.push({ name: rawName || "unknown", ok: false, text: `(不支持的幻觉工具: ${rawName || "?"},已跳过)` })
+      continue
+    }
+
+    try {
+      const r = runLocalAgentWithArguments(["--tool", JSON.stringify(localTool)])
+      if (r && r.handled) {
+        results.push({ name: rawName, ok: r.status === "success", text: r.assistant_text || "" })
+      } else {
+        results.push({ name: rawName, ok: false, text: "(工具未处理)" })
+      }
+    } catch (e) {
+      results.push({ name: rawName, ok: false, text: `(执行异常: ${e && e.message ? e.message : e})` })
+    }
+  }
+  return results
+}
+
+// 把工具结果拼成 user message, 第二次调 LLM, 返回 finalText
+// 不重答的话原样返回 null
+function maybeResolveHallucinatedToolCall(chatFile, assistantText, provider, systemPrompt, contextChat, timeoutSeconds) {
+  if (!isHallucinatedToolCall(assistantText)) return null
+
+  const toolCalls = extractHallucinatedToolCalls(assistantText)
+  if (toolCalls.length === 0) {
+    return `(W9.1 检测到 <toolcall> 标记但无法解析任何工具调用)\n\n${assistantText}`
+  }
+
+  // append 原 hallucinate 文本 (留作 debug)
+  appendChat(chatFile, { role: "assistant", content: assistantText })
+
+  // 真跑工具
+  const results = runHallucinatedToolCalls(toolCalls)
+  const summary = results.map(r =>
+    r.ok
+      ? `[${r.name} 成功] ${r.text}`
+      : `[${r.name} 失败] ${r.text}`
+  ).join("\n\n")
+
+  const toolResultMsg = `【W9.1 自动执行工具】\n${summary}\n\n请基于以上工具结果回答用户。`
+  appendChat(chatFile, { role: "user", content: toolResultMsg })
+
+  // 重新调 LLM
+  const reSession = readSession(chatFile)
+  const reContext = reSession.messages.slice(-(parseInt(envVar("max_context")) || 40))
+  const messages = systemPrompt ?
+    [{ role: "system", content: systemPrompt }].concat(reContext) :
+    reContext
+
+  const reResult = runChatCompletion(provider, {
+    model: provider.model,
+    messages: messages,
+    stream: false
+  }, timeoutSeconds * 2)  // 二次调用放宽 timeout
+
+  if (reResult.error) {
+    return `(W9.1 工具已跑, 但 LLM 重答失败: ${reResult.error})\n\n${summary}`
+  }
+  return reResult.content || ""
+}
+
 // [W9 continuation] 用户说"go on" / "继续" / "接着说" — 读 pending 拼成新一轮 user message
 function isContinuationQuery(text) {
   const t = (text || "").trim()
@@ -852,13 +970,38 @@ function runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextCh
     })
   }
 
-  const assistantText = result.content || ""
-  appendChat(chatFile, { role: "assistant", content: assistantText })
+  const rawText = result.content || ""
+
+  // [W9.1] M3 推理模型常 hallucinate <toolcall> 文本 — detect + 真跑 + 重答
+  const resolved = maybeResolveHallucinatedToolCall(chatFile, rawText, provider, systemPrompt, timeoutSeconds)
+  const assistantText = resolved !== null ? resolved : rawText
+
+  if (resolved === null) {
+    appendChat(chatFile, { role: "assistant", content: assistantText })
+  }
+  // 注: maybeResolveHallucinatedToolCall 已 appendChat 原 hallucinate + tool_result + (现在) final
+  // 但 final 由它内部再调 LLM 后产生, 我们也得 append final 自身
+  // (在 resolved !== null 路径下,我们这里不再 append — 已在 maybeResolve 路径中处理)
+
+  // 注: maybeResolveHallucinatedToolCall 内部已 appendChat:
+  //   1) 原 hallucinate assistant text
+  //   2) tool_result user message
+  //   3) 重答的 assistant text (如果有)
+  // 所以 resolved !== null 路径下不需要再 appendChat
+
+  // [W9.1] 修正: 把 resolved 的 final answer 也 append
+  if (resolved !== null && resolved.length > 0) {
+    appendChat(chatFile, { role: "assistant", content: resolved })
+  }
+
   maybeTriggerBackgroundReview(chatFile)
   maybeIndexSession()
 
-  // [W9 continuation] anthropic 路径下,如果 LLM 答到一半就停,存 pending
-  if (isHangingPreamble(assistantText)) {
+  // [W9 continuation] anthropic 路径下,如果 LLM 答到一半就停, 存 pending
+  // W9.1: 如果是 hallucinate <toolcall> (resolved !== null), 已经真跑工具+重答 → clear pending
+  if (resolved !== null) {
+    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
+  } else if (isHangingPreamble(assistantText)) {
     try {
       runLocalAgentWithArguments([
         "--continuation-save",
@@ -989,8 +1132,31 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
     })
   }
 
-  const finalText = finishReason === "stop" ? withHangingPreambleFallback(responseText) : responseText
-  appendChat(chatFile, { role: "assistant", content: finalText })
+  const preResolvedText = finishReason === "stop" ? withHangingPreambleFallback(responseText) : responseText
+
+  // [W9.1] M3 推理模型常 hallucinate <toolcall> 文本 — detect + 真跑 + 重答
+  let resolvedText = null
+  if (finishReason === "stop" && isHallucinatedToolCall(preResolvedText)) {
+    const provider = resolveProvider()
+    if (!providerRequiresApiKey(provider) || (provider.apiKey && provider.apiKey.length > 0)) {
+      // systemPrompt 在 stream 路径没传过来 — 重读 session
+      const sessionForResolve = readSession(chatFile)
+      const contextForResolve = sessionForResolve.messages || []
+      const sysPromptForResolve = composeSystemPrompt(envVar("system_prompt") || "", "")
+      resolvedText = maybeResolveHallucinatedToolCall(
+        chatFile, preResolvedText, provider, sysPromptForResolve, timeoutSeconds
+      )
+    }
+  }
+
+  const finalText = resolvedText !== null ? resolvedText : preResolvedText
+  if (resolvedText === null) {
+    appendChat(chatFile, { role: "assistant", content: finalText })
+  }
+  // resolvedText !== null 路径下 maybeResolveHallucinatedToolCall 已 appendChat
+  if (resolvedText !== null && resolvedText.length > 0) {
+    appendChat(chatFile, { role: "assistant", content: resolvedText })
+  }
   deleteFile(streamFile)
   deleteFile(pidStreamFile)
   maybeTriggerBackgroundReview(chatFile)
@@ -998,7 +1164,10 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
 
   // [W9 continuation] 如果 LLM 答到一半就停 (isHangingPreamble),
   // 把 last_query (从 session 最后一条 user msg 取) + last_partial 存盘
-  if (finishReason === "stop" && isHangingPreamble(responseText)) {
+  // [W9.1] 如果是 hallucinate <toolcall> (resolvedText !== null), 已经真跑工具+重答 → clear pending
+  if (resolvedText !== null) {
+    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
+  } else if (finishReason === "stop" && isHangingPreamble(responseText)) {
     try {
       const sessionForCont = readSession(chatFile)
       const msgsForCont = sessionForCont.messages || []
