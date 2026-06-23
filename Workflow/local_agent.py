@@ -1411,6 +1411,349 @@ def run_tool_call(raw_json: str) -> None:
     response(status, assistant_text, footer, tool=data.get("tool", ""))
 
 
+# === W10: in-process chat harness with LiteLLM ===
+# 设计要点 (跟 Hermes run_conversation 同构):
+#   while max_iterations: LLM(streaming=False Step 2; streaming Step 3) →
+#     parse tool_calls → REGISTRY.dispatch → append tool result → continue
+# LiteLLM 把所有 provider (minimax/deepseek/openai/anthropic) 统一成 OpenAI 协议。
+# 不再需要 W9.1 的 M3 XML hallucinate 解析 (Step 1 验证: M3 原生支持 tool_calls)。
+import plistlib as _plistlib
+
+W10_MAX_ITERATIONS = 5
+W10_TIMEOUT_SECONDS = 60
+W10_LITELLM_IMPORT_ERROR: Optional[str] = None
+try:
+    import litellm as _litellm
+except Exception as _exc:  # noqa: BLE001
+    _litellm = None
+    W10_LITELLM_IMPORT_ERROR = str(_exc)
+
+
+def _alfred_env(name: str, default: str = "") -> str:
+    """跟 JXA envVar() 一致: 优先 shell env, fallback Alfred prefs.plist."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    try:
+        prefs_path = Path.home() / "Library/Application Support/Alfred/Alfred.alfredpreferences/workflows/user.workflow.C4B4D1C2-50BE-4FD4-AE5E-9324DBED0C51/prefs.plist"
+        with open(prefs_path, "rb") as f:
+            prefs = _plistlib.load(f)
+        return str(prefs.get(name, default)).strip()
+    except Exception:
+        return default
+
+
+def _resolve_provider_config() -> dict:
+    """读当前 provider 配置 (跟 JXA envVar() 同源, 默认 minimax)."""
+    provider = (_alfred_env("ac_provider") or "minimax").strip().lower()
+    if provider == "deepseek":
+        return {
+            "provider": "deepseek",
+            "api_key": _alfred_env("deepseek_api_key"),
+            "endpoint": _alfred_env("deepseek_api_endpoint") or "https://api.deepseek.com/v1",
+            "model": _alfred_env("deepseek_model") or "deepseek-chat",
+        }
+    if provider == "openai":
+        return {
+            "provider": "openai",
+            "api_key": _alfred_env("openai_api_key"),
+            "endpoint": _alfred_env("openai_base_url") or "https://api.openai.com/v1",
+            "model": _alfred_env("openai_model") or "gpt-4o",
+        }
+    if provider == "anthropic":
+        return {
+            "provider": "anthropic",
+            "api_key": _alfred_env("anthropic_api_key"),
+            "endpoint": _alfred_env("anthropic_base_url") or "",
+            "model": _alfred_env("anthropic_model") or "claude-sonnet-4-20250514",
+        }
+    # 默认 minimax (M3)
+    return {
+        "provider": "minimax",
+        "api_key": _alfred_env("minimax_api_key"),
+        "endpoint": _alfred_env("minimax_api_endpoint") or "https://api.minimaxi.com/v1",
+        "model": _alfred_env("minimax_model") or "MiniMax-M3",
+    }
+
+
+def _litellm_model_name(cfg: dict) -> str:
+    """把内部 provider 名转 LiteLLM model 字符串. OpenAI 兼容用 openai/ 前缀."""
+    provider = cfg["provider"]
+    model = cfg["model"]
+    if provider in ("minimax", "deepseek", "openai"):
+        return f"openai/{model}"
+    if provider == "anthropic":
+        return f"anthropic/{model}"
+    return model
+
+
+def _litellm_complete(cfg: dict, messages: list, tools: list = None, stream: bool = False):
+    """LiteLLM completion. 返回 ModelResponse 或 iterator (stream=True)."""
+    if _litellm is None:
+        raise RuntimeError(f"litellm 未安装: {W10_LITELLM_IMPORT_ERROR}")
+    kwargs = {
+        "model": _litellm_model_name(cfg),
+        "api_key": cfg["api_key"],
+        "messages": messages,
+        "timeout": W10_TIMEOUT_SECONDS,
+    }
+    if cfg.get("endpoint"):
+        kwargs["base_url"] = cfg["endpoint"]
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    if stream:
+        kwargs["stream"] = True
+    return _litellm.completion(**kwargs)
+
+
+def _assistant_message_to_dict(msg) -> dict:
+    """LiteLLM Message 对象 → dict (写回 chat.json)."""
+    out: Dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
+    if getattr(msg, "tool_calls", None):
+        out["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for tc in msg.tool_calls
+        ]
+    # M3 / DeepSeek 思考链 (Hermes 同款: reasoning_content 字段)
+    if getattr(msg, "reasoning_content", None):
+        out["reasoning_content"] = msg.reasoning_content
+    return out
+
+
+def _convert_registry_tools_to_openai() -> list:
+    """agent_tools.REGISTRY schemas → LiteLLM 接受的 OpenAI format."""
+    try:
+        from agent_tools import REGISTRY
+    except Exception:
+        return []
+    schemas: List[Dict[str, Any]] = []
+    for tool in REGISTRY.all():
+        schemas.append({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.schema or {"type": "object", "properties": {}},
+            },
+        })
+    return schemas
+
+
+def _w10_load_chat(chat_file: Path) -> list:
+    if not chat_file.exists():
+        return []
+    try:
+        data = json.loads(chat_file.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and isinstance(data.get("messages"), list):
+            return data["messages"]
+    except Exception:
+        pass
+    return []
+
+
+def _w10_save_chat(chat_file: Path, messages: list) -> None:
+    chat_file.parent.mkdir(parents=True, exist_ok=True)
+    chat_file.write_text(json.dumps(messages, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _w10_dispatch_tool(name: str, arguments_json: str) -> tuple[str, str]:
+    """跑一个 tool, 返回 (status, result_text). 出错也返回 status='error'."""
+    try:
+        from agent_tools import REGISTRY
+    except Exception as exc:
+        return "error", f"REGISTRY 不可用: {exc}"
+
+    if REGISTRY.get(name) is None:
+        available = ", ".join(REGISTRY.names())
+        return "error", f"工具 {name} 不存在.可用: {available}"
+
+    try:
+        args = json.loads(arguments_json) if arguments_json else {}
+    except Exception as exc:
+        return "error", f"参数解析失败: {exc}"
+    if not isinstance(args, dict):
+        args = {}
+
+    try:
+        allowed_toolsets = _resolve_allowed_toolsets()
+        status, text, footer = REGISTRY.dispatch(name, args, allowed_toolsets=allowed_toolsets)
+    except Exception as exc:  # noqa: BLE001
+        return "error", f"工具 {name} 执行失败: {exc}"
+
+    # 跟 W9.1 一致: 拼 text + footer
+    combined = text
+    if footer and footer != text:
+        combined = f"{text}\n\n({footer})"
+    return status, combined
+
+
+def _load_context_file() -> str:
+    """跟 JXA loadContextFile() 一致: 读 context_file_path 或 OB 库 AGENTS.md."""
+    configured = _alfred_env("context_file_path", "").strip()
+    vault = _alfred_env("obsidian_vault_path", "").strip()
+    candidates = [configured, Path(f"{vault}/AGENTS.md") if vault else ""]
+    for path_str in candidates:
+        if not path_str:
+            continue
+        p = Path(path_str)
+        if not p.exists():
+            continue
+        content = p.read_text(encoding="utf-8").strip()
+        if content:
+            return f"以下是项目上下文（来自 {path_str}）：\n\n{content}"
+    return ""
+
+
+_RUNTIME_GUARD_PROMPT = (
+    '【运行约束 · 最高优先级，与上文任何"主动去做"的指令冲突时以本节为准】\n'
+    "你实际拥有的能力（仅这些，由本地 Agent 在你回复前自动完成，你无法在回复中途临时调用）：\n"
+    "- 读写 /Users/DRLer 下的本地文件、Obsidian 库；新增提醒；读写长期记忆。\n"
+    "- 联网搜索 web_search（调 Tavily API，免费 1000 次/月，需配 tavily_api_key）。\n"
+    "- 网页抓取 web_fetch（调 baoyu-fetch CLI，需 bun + Chrome）。\n"
+    "- 工具可以连续调用直到拿到完整信息。\n"
+    "- 工具调用结束后会有一步「合成」:把原始搜索结果/网页 markdown 整理成简洁答案。\n"
+    "你没有的能力（绝不要声称会去做）：\n"
+    "- 跑未授权的本地 shell 命令、调未列出的外部服务、查未授权的数据库、等待后续结果。\n"
+    "硬性输出规则：\n"
+    "- 禁止用「我先看下…」「我去查一下」「稍等/接下来我来…」这类只表态不给结果的句子作为整段回复或结尾。\n"
+    "- 工具返回「未找到相关结果」时直接告诉用户搜不到，禁止用训练数据常识编造答案。\n"
+    "- 工具结果与用户问题不直接相关时明确说明，不要把无关结果强行套到问题上。\n"
+    "- 引用工具结果时显式标注来源，不要把搜索结果伪装成自己知道。\n"
+    "- 每次回复都必须当场给出完整结论、可执行答案、或一个明确的问题。"
+)
+
+
+def _compose_chat_system_prompt(user_query: str) -> str:
+    """组合 system prompt: soul + user.custom + context_file + skills + memory + runtime_guard."""
+    parts: List[str] = []
+
+    # 1. Soul
+    try:
+        from soul_store import soul_prompt_block
+        soul = soul_prompt_block(data_dir(), soul_override())
+    except Exception:
+        soul = ""
+    if soul:
+        parts.append(soul)
+
+    # 2. 用户自定义 system_prompt (来自 Alfred env vars)
+    custom = _alfred_env("system_prompt", "").strip()
+    if custom:
+        parts.append(custom)
+
+    # 3. 项目上下文 (AGENTS.md)
+    ctx = _load_context_file()
+    if ctx:
+        parts.append(ctx)
+
+    # 4. 相关 Skill
+    try:
+        from agent_skills import format_skills_prompt_block
+        skills = format_skills_prompt_block(user_query or "", top_k=2)
+    except Exception:
+        skills = ""
+    if skills:
+        parts.append(skills)
+
+    # 5. 长期记忆
+    try:
+        store = get_memory_store()
+        mem = store.prompt_block()
+    except Exception:
+        mem = ""
+    if mem:
+        parts.append(mem)
+
+    # 6. Runtime guard (最高优先级)
+    parts.append(_RUNTIME_GUARD_PROMPT)
+
+    return "\n\n".join(parts)
+
+
+def cmd_chat(user_query: str) -> int:
+    """W10: in-process chat harness. CLI: --chat "<query>".
+
+    单进程内跑 LLM ↔ tool loop, 跟 Hermes run_conversation 同构。
+    最终回复写 stdout (供 Alfred 显示), 中间 messages 写 chat.json。
+    """
+    if _litellm is None:
+        print(f"[W10] litellm 未安装: {W10_LITELLM_IMPORT_ERROR}", file=sys.stderr)
+        return 1
+
+    chat_file = data_dir() / "chat.json"
+    messages = _w10_load_chat(chat_file)
+
+    # 拼 system prompt 注入 (仅在 session 开始 / 无 system msg 时)
+    if not messages or messages[0].get("role") != "system":
+        sys_prompt = _compose_chat_system_prompt(user_query)
+        if sys_prompt:
+            messages.insert(0, {"role": "system", "content": sys_prompt})
+
+    messages.append({"role": "user", "content": user_query})
+
+    cfg = _resolve_provider_config()
+    if not cfg["api_key"]:
+        print(f"[W10] {cfg['provider']} provider 未配 api_key", file=sys.stderr)
+        return 2
+
+    tool_schemas = _convert_registry_tools_to_openai()
+    final_text = ""
+    exit_code = 0
+
+    # 上下文窗口: 保留 system msg + 最近 N 条 (默认 40, 跟原 JXA 一致)
+    max_ctx = int(_alfred_env("max_context") or 40)
+    system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
+    tail = messages[1:] if system_msg else messages
+    truncated_tail = tail[-max_ctx:] if len(tail) > max_ctx else tail
+    messages = ([system_msg] if system_msg else []) + truncated_tail
+
+    for iteration in range(W10_MAX_ITERATIONS):
+        try:
+            resp = _litellm_complete(cfg, messages, tools=tool_schemas or None)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[W10] LLM 调用失败 (iter {iteration + 1}): {exc}", file=sys.stderr)
+            exit_code = 3
+            break
+
+        assistant_msg = resp.choices[0].message
+        assistant_dict = _assistant_message_to_dict(assistant_msg)
+        messages.append(assistant_dict)
+        final_text = assistant_dict.get("content", "")
+
+        # 没 tool_calls → 最终回复, 退出 loop
+        if not getattr(assistant_msg, "tool_calls", None):
+            break
+
+        # 执行 tool calls
+        for tc in assistant_msg.tool_calls:
+            status, tool_result = _w10_dispatch_tool(tc.function.name, tc.function.arguments)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": tc.function.name,
+                "content": tool_result,
+            })
+    else:
+        # for-else: 达到 max_iterations 还没 break
+        print(f"[W10] 警告: 达到 max_iterations={W10_MAX_ITERATIONS}, 强制退出", file=sys.stderr)
+        exit_code = 4
+
+    _w10_save_chat(chat_file, messages)
+    # stdout 只输出最终答复 (供 Alfred 抓取)
+    print(final_text)
+    return exit_code
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--ensure-soul":
         from soul_store import ensure_soul
@@ -1560,6 +1903,11 @@ def main() -> None:
         clear_continuation()
         print(json.dumps({"status": "ok", "cleared": True}, ensure_ascii=False))
         return
+
+    if len(sys.argv) > 2 and sys.argv[1] == "--chat":
+        # argv: --chat "<user_query>"
+        # W10: in-process chat harness with LiteLLM + tool dispatch
+        sys.exit(cmd_chat(sys.argv[2]))
 
     query = sys.argv[1] if len(sys.argv) > 1 else ""
     trimmed = query.strip()

@@ -12,27 +12,12 @@ function fileExists(path) {
   return $.NSFileManager.defaultManager.fileExistsAtPath(path)
 }
 
-function fileModified(path) {
-  const attributes = $.NSFileManager.defaultManager
-    .attributesOfItemAtPathError(path, undefined)
-
-  if (!attributes || !attributes.js || !attributes.js["NSFileModificationDate"])
-    return 0
-
-  return attributes.js["NSFileModificationDate"].js.getTime()
-}
-
 function deleteFile(path) {
   return $.NSFileManager.defaultManager.removeItemAtPathError(path, undefined)
 }
 
 function writeFile(path, text) {
   $(text).writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, undefined)
-}
-
-function readFile(path) {
-  const content = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined)
-  return (content && content.js) || ""
 }
 
 function ensureDirectory(path) {
@@ -53,17 +38,6 @@ function readSession(path) {
   return parseSession(JSON.parse(chatString))
 }
 
-function readJson(path, fallback) {
-  if (!fileExists(path)) return fallback
-
-  try {
-    const jsonString = $.NSString.stringWithContentsOfFileEncodingError(path, $.NSUTF8StringEncoding, undefined).js
-    return JSON.parse(jsonString)
-  } catch {
-    return fallback
-  }
-}
-
 function writeSession(path, session) {
   if (!session.title) {
     writeFile(path, JSON.stringify(session.messages))
@@ -74,12 +48,6 @@ function writeSession(path, session) {
     title: session.title,
     messages: session.messages
   }))
-}
-
-function appendChat(path, message) {
-  const session = readSession(path)
-  session.messages = session.messages.concat(message)
-  writeSession(path, session)
 }
 
 function chatLabels() {
@@ -94,247 +62,6 @@ function demoteMarkdownHeadings(text, bump = 3) {
   return text.replace(/^(#{1,6})(\s)/gm, (_, hashes, space) => {
     const level = Math.min(hashes.length + bump, 6)
     return "#".repeat(level) + space
-  })
-}
-
-function isHangingPreamble(text) {
-  const t = (text || "").trim()
-  if (!t) return true
-  if (/[:：]\s*$/.test(t)) return true
-  if (t.length > 140) return false
-  const resultMarker = /(因为|所以|结论|建议|步骤|方法|答案|如下|http|无法|不能|没有|不支持|你可以|要不|或者|第一|结果是|^\s*\d+\.)/m
-  if (resultMarker.test(t)) return false
-  const sentences = t.split(/[。.!！?？\n]+/).map(s => s.trim()).filter(Boolean)
-  if (sentences.length === 0) return true
-  const intentVerb = /(看下|看一下|看看|先看|查下|查一下|查查|搜下|搜一下|抓下|抓一下|试下|试一下|我试|去查|去看|去搜|去抓|并行查|查几个|搜几个|目录结构|目录里有|目录有|稍等|接下来|马上|这就|我来|让我|我先|我直接|我去)/
-  return sentences.every(s => intentVerb.test(s))
-}
-
-const HANGING_PREAMBLE_NOTE = "" // W8: 已支持联网,无需"无法联网"提示
-
-function withHangingPreambleFallback(text) {
-  if (!isHangingPreamble(text)) return text
-  const base = (text || "").trim()
-  return base ? `${base}\n\n${HANGING_PREAMBLE_NOTE}` : HANGING_PREAMBLE_NOTE
-}
-
-// [W9.1] M3 推理模型在没 tool 支持时, 会 mimic 训练数据输出 <toolcall>...</toolcall> 文本。
-// 这不是真工具调用,但 chat 脚本之前直接当 assistant 文本存盘 → 用户看 hallucinate + 答空。
-// 这里 detect + 真调 + 重答, 解决:
-//   1) M3 hallucinate bug — 用户看到真搜索结果而非 <toolcall> JSON
-//   2) 联网能力兜底 — 就算 system prompt 没强调"用搜索", M3 自带的 web_search 幻觉也被真跑
-function isHallucinatedToolCall(text) {
-  return /<\s*tool[_]?call\b/i.test(text || "")
-}
-
-// 解析 M3 输出的 tool call。两种风格:
-//   JSON:    <toolcall>{"name":"web_search","arguments":{"query":"..."}}</toolcall>
-//   XML:     <toolcall>
-//              <invoke name="web_search">
-//                <query>...</query>
-//              </invoke>
-//            </toolcall>
-// 返回 [{name, arguments}] 数组 (可能 0..N 个)
-function extractHallucinatedToolCalls(text) {
-  const out = []
-  if (!text) return out
-
-  // 找 <toolcall>...</toolcall> 块 (任意大小写, 任意属性)
-  const blockRe = /<\s*tool[_]?call\s*[^>]*>([\s\S]*?)<\s*\/\s*tool[_]?call\s*>/gi
-  const blocks = [...text.matchAll(blockRe)]
-
-  for (const blockMatch of blocks) {
-    const body = blockMatch[1] || ""
-
-    // --- 1) JSON 风格: 多个相邻 {name, arguments} 块 ---
-    const jsonRe = /\{(?:[^{}]|\{[^{}]*\})*\}/g
-    const jsonObjs = body.match(jsonRe) || []
-    for (const o of jsonObjs) {
-      try {
-        const obj = JSON.parse(o)
-        if (obj && (obj.name || obj.tool)) {
-          out.push({
-            name: obj.name || obj.tool,
-            arguments: obj.arguments || obj.args || {}
-          })
-        }
-      } catch {}
-    }
-    if (out.length > 0) continue
-
-    // --- 2) XML 风格: <invoke name="X">...<param>value</param>...</invoke> ---
-    const invokeRe = /<\s*invoke\s+[^>]*name\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\s*\/\s*invoke\s*>/gi
-    for (const inv of body.matchAll(invokeRe)) {
-      const name = (inv[1] || "").trim()
-      const inner = inv[2] || ""
-      if (!name) continue
-
-      // 提取内层 <key>value</key> 参数 (key 必须成对同名)
-      const args = {}
-      const paramRe = /<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/g
-      for (const p of inner.matchAll(paramRe)) {
-        const key = p[1]
-        const value = (p[2] || "").trim()
-        if (key && value && !(key in args)) {
-          args[key] = value
-        }
-      }
-      out.push({ name: name, arguments: args })
-    }
-
-    // --- 3) 容错: 单个 invoke 没闭合, 只 match name 属性 ---
-    if (out.length === 0) {
-      const looseName = body.match(/<\s*invoke\s+[^>]*name\s*=\s*["']([^"']+)["']/i)
-      if (looseName) {
-        const args = {}
-        const paramRe2 = /<\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/g
-        for (const p of body.matchAll(paramRe2)) {
-          const key = p[1]
-          const value = (p[2] || "").trim()
-          if (key && value && !(key in args)) {
-            args[key] = value
-          }
-        }
-        out.push({ name: looseName[1].trim(), arguments: args })
-      }
-    }
-  }
-  return out
-}
-
-// 真跑 M3 hallucinate 的工具 (通过 local_agent --tool)
-// 返回 [{name, ok, text}]
-function runHallucinatedToolCalls(toolCalls) {
-  const results = []
-  for (const tc of toolCalls || []) {
-    const rawName = (tc && (tc.name || tc.tool)) || ""
-    const name = rawName.toLowerCase()
-    const args = (tc && (tc.arguments || tc.args)) || {}
-
-    let localTool = null
-    if (name === "web_search" || name === "websearch" || name === "search") {
-      localTool = { tool: "web_search", args: { query: args.query || args.q || "" } }
-    } else if (name === "web_fetch" || name === "webfetch" || name === "fetch") {
-      localTool = { tool: "web_fetch", args: { url: args.url || "" } }
-    }
-
-    if (!localTool) {
-      results.push({ name: rawName || "unknown", ok: false, text: `(不支持的幻觉工具: ${rawName || "?"},已跳过)` })
-      continue
-    }
-
-    try {
-      const r = runLocalAgentWithArguments(["--tool", JSON.stringify(localTool)])
-      if (r && r.handled) {
-        results.push({ name: rawName, ok: r.status === "success", text: r.assistant_text || "" })
-      } else {
-        results.push({ name: rawName, ok: false, text: "(工具未处理)" })
-      }
-    } catch (e) {
-      results.push({ name: rawName, ok: false, text: `(执行异常: ${e && e.message ? e.message : e})` })
-    }
-  }
-  return results
-}
-
-// 把工具结果拼成 user message, 第二次调 LLM, 返回 finalText
-// 不重答的话原样返回 null
-function maybeResolveHallucinatedToolCall(chatFile, assistantText, provider, systemPrompt, contextChat, timeoutSeconds) {
-  if (!isHallucinatedToolCall(assistantText)) return null
-
-  const toolCalls = extractHallucinatedToolCalls(assistantText)
-  if (toolCalls.length === 0) {
-    return `(W9.1 检测到 <toolcall> 标记但无法解析任何工具调用)\n\n${assistantText}`
-  }
-
-  // append 原 hallucinate 文本 (留作 debug)
-  appendChat(chatFile, { role: "assistant", content: assistantText })
-
-  // 真跑工具
-  const results = runHallucinatedToolCalls(toolCalls)
-  const summary = results.map(r =>
-    r.ok
-      ? `[${r.name} 成功] ${r.text}`
-      : `[${r.name} 失败] ${r.text}`
-  ).join("\n\n")
-
-  const toolResultMsg = `【W9.1 自动执行工具】\n${summary}\n\n请基于以上工具结果回答用户。`
-  appendChat(chatFile, { role: "user", content: toolResultMsg })
-
-  // 重新调 LLM
-  const reSession = readSession(chatFile)
-  const reContext = reSession.messages.slice(-(parseInt(envVar("max_context")) || 40))
-  const messages = systemPrompt ?
-    [{ role: "system", content: systemPrompt }].concat(reContext) :
-    reContext
-
-  const reResult = runChatCompletion(provider, {
-    model: provider.model,
-    messages: messages,
-    stream: false
-  }, timeoutSeconds * 2)  // 二次调用放宽 timeout
-
-  if (reResult.error) {
-    return `(W9.1 工具已跑, 但 LLM 重答失败: ${reResult.error})\n\n${summary}`
-  }
-  return reResult.content || ""
-}
-
-// [W9 continuation] 用户说"go on" / "继续" / "接着说" — 读 pending 拼成新一轮 user message
-function isContinuationQuery(text) {
-  const t = (text || "").trim()
-  // 严格匹配"go on"作整个词, 避免 "go online" 等误中
-  return /^(?:go on|continue|please continue|go ahead)\b/i.test(t)
-    || /^(继续|接着说|接着|继续说)$/.test(t)
-}
-
-function handleContinuation(chatFile, typedQuery, provider, systemPrompt, timeoutSeconds) {
-  // 1. 读 pending
-  const contResult = runLocalAgentWithArguments(["--continuation-get"])
-  const continuation = contResult && contResult.continuation
-  if (!continuation) {
-    return responseWithConversation(chatFile, typedQuery,
-      "没有待续的对话(可能已完成或已过期)。",
-      "无 pending")
-  }
-
-  // 2. 拼 user message: 上一轮 query + 上一轮 partial + 用户 go on 指令
-  const lastQuery = continuation.last_query || ""
-  const lastPartial = continuation.last_assistant_partial || ""
-  const continuePrompt = [
-    "【W9 continuation · 用户请求续答】",
-    "上一轮用户问题:",
-    lastQuery,
-    "",
-    "你上一轮(未完成)的回答:",
-    lastPartial,
-    "",
-    "现在请接着上一轮继续回答 — 不要重复已完成的部分,直接接续。"
-  ].join("\n")
-
-  // 3. 把 continue_prompt 作为新一轮 user message, 调 LLM
-  appendChat(chatFile, { role: "user", content: continuePrompt })
-  const session = readSession(chatFile)
-  const ongoingMessages = session.messages
-  const contextChat = ongoingMessages.slice(-(parseInt(envVar("max_context")) || 40))
-
-  if (provider.apiStyle === "anthropic") {
-    const result = runCompleteChat(chatFile, "[continuation]", provider, systemPrompt, contextChat, timeoutSeconds)
-    // 续答成功,清 pending
-    runLocalAgentWithArguments(["--continuation-clear"])
-    return result
-  }
-
-  // 流式路径(startStream): 由 caller 决定是否清 pending
-  // 这里只返回触发 rerun + streaming
-  const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
-  const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
-  startStream(provider.endpoint, provider.apiKey, provider.model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, provider.supportsThinkingParam)
-  return JSON.stringify({
-    rerun: 0.1,
-    variables: { streaming_now: true, stream_marker: "1" },
-    response: markdownSession({ title: session.title, messages: ongoingMessages }),
-    behaviour: { scroll: "end" }
   })
 }
 
@@ -370,118 +97,6 @@ function markdownChat(messages, ignoreLastInterrupted = true) {
 function markdownSession(session, ignoreLastInterrupted = true) {
   const header = session.title ? `## ⌖ ${session.title}\n\n---\n\n` : ""
   return `${header}${markdownChat(session.messages, ignoreLastInterrupted)}`
-}
-
-function markdownSessionWithDraft(chatFile, draftText) {
-  const session = readSession(chatFile)
-  const messages = session.messages.slice()
-  if (messages.length > 0 && messages[messages.length - 1]["role"] === "user" && draftText)
-    messages.push({ role: "assistant", content: draftText })
-
-  return markdownSession({ title: session.title, messages }, false)
-}
-
-function outputTokenLimit() {
-  const configured = parseInt(envVar("max_output_tokens"))
-  return Number.isFinite(configured) && configured > 0 ? configured : 4096
-}
-
-function streamMaxSeconds(timeoutSeconds) {
-  const configured = parseInt(envVar("stream_max_seconds"))
-  if (Number.isFinite(configured) && configured > 0) return configured
-  return Math.min(Math.max(timeoutSeconds * 4, 120), 300)
-}
-
-function streamIdleSeconds(timeoutSeconds) {
-  const configured = parseInt(envVar("stream_idle_seconds"))
-  if (Number.isFinite(configured) && configured > 0) return configured
-  return Math.max(timeoutSeconds * 3, 90)
-}
-
-function skillsPrompt(query) {
-  if (skillsPrompt._cache && skillsPrompt._cache.query === (query || "")) {
-    return skillsPrompt._cache.value
-  }
-  const result = runLocalAgentWithArguments(["--skills-prompt", query || ""])
-  let value = ""
-  if (result && typeof result === "string" && result.trim().length > 0) {
-    value = result.trim()
-  }
-  skillsPrompt._cache = { query: query || "", value: value }
-  return value
-}
-
-function memoryPrompt() {
-  const legacy = `${envVar("alfred_workflow_data")}/memory.json`
-  const memDir = `${envVar("alfred_workflow_data")}/memories`
-  if (fileExists(legacy) && !fileExists(`${memDir}/MEMORY.md`) && !fileExists(`${memDir}/USER.md`))
-    runLocalAgentWithArguments(["--migrate-memory"])
-
-  const result = runLocalAgentWithArguments(["--memory-prompt"])
-  if (result && result.prompt && result.prompt.trim().length > 0)
-    return result.prompt
-
-  return ""
-}
-
-function soulPrompt() {
-  runLocalAgentWithArguments(["--ensure-soul"])
-
-  const result = runLocalAgentWithArguments(["--soul-prompt"])
-  if (result && result.prompt && result.prompt.trim().length > 0)
-    return result.prompt
-
-  return ""
-}
-
-function runtimeGuardPrompt() {
-  return [
-    "【运行约束 · 最高优先级，与上文任何“主动去做”的指令冲突时以本节为准】",
-    "你在一个单轮流式对话里运行：本次回复结束后没有自动续跑，你写下的任何「等会儿/接下来我会去做」的动作都不会真的发生。",
-    "你实际拥有的能力（仅这些，由本地 Agent 在你回复前自动完成，你无法在回复中途临时调用）：",
-    "- 读写 /Users/DRLer 下的本地文件、Obsidian 库；新增提醒；读写长期记忆。",
-    "- 联网搜索 web_search（调 Tavily API，免费 1000 次/月，需在 [x] Workflow Env Vars 配 tavily_api_key）。",
-    "- 网页抓取 web_fetch（调 baoyu-fetch CLI，需 bun + Chrome）。",
-    "- 工具可以连续调用（web_search → web_fetch → web_search 再次搜细节），直到拿到完整信息。",
-    "- 工具调用结束后会有一步「合成」:把原始搜索结果/网页 markdown 整理成简洁答案（这一步已由 runtimeGuard 强制:禁止瞎掰/禁止套用无关结果/必须标注来源）。",
-    "你没有的能力（绝不要声称会去做）：",
-    "- 跑未授权的本地 shell 命令、调未列出的外部服务、查未授权的数据库、等待后续结果。",
-    "硬性输出规则：",
-    "- 禁止用「我先看下…」「我去查一下」「让我并行查几个来源」「稍等/接下来我来…」这类只表态不给结果的句子作为整段回复或结尾。",
-    "- 遇到工具暂时不可用（比如 tavily_api_key 没配、bun 没装）：直接告诉用户去哪配置，不要反复说不能联网。",
-    "- 工具返回「未找到相关结果 / 0 条结果 / 网络错误 / 重试 2 次仍失败」时：直接告诉用户搜不到/失败，禁止用训练数据里的常识、其它剧/角色的印象、或通用模板去「补全」答案（典型反例：搜不到某角色时，凭印象编造演员/剧情/家庭关系）。",
-    "- 工具结果与用户问题不直接相关时（如搜 A 角色却返回 B 角色的资料）：明确说「搜索结果中未找到 A 的相关信息，找到了 B 的相关资料：...」，让用户自己判断；不要把无关结果强行套到问题上。",
-    "- 引用工具结果时显式标注来源（用「Tavily 搜索结果显示…」「搜索结果中提到…」这类措辞），不要把搜索结果伪装成「我从公开资料里看到…」这种凭空背书。",
-    "- 每次回复都必须当场给出完整结论、可执行答案、或一个明确的问题；不要以冒号、引导语、未完成的计划收尾。"
-  ].join("\n")
-}
-
-function composeSystemPrompt(systemPrompt, userQuery) {
-  const soul = soulPrompt()
-  const memory = memoryPrompt()
-  const contextFile = loadContextFile()
-  const skills = skillsPrompt(userQuery || "")
-  return [soul, systemPrompt, contextFile, skills, memory, runtimeGuardPrompt()].filter(item => item && item.trim().length > 0).join("\n\n")
-}
-
-function loadContextFile() {
-  const configured = (envVar("context_file_path") || "").trim()
-  const vaultAgents = (envVar("obsidian_vault_path") || "").trim()
-  const candidates = [
-    configured,
-    vaultAgents ? `${vaultAgents}/AGENTS.md` : ""
-  ].filter(path => path && fileExists(path))
-
-  if (candidates.length === 0) return ""
-
-  const content = readFile(candidates[0]).trim()
-  if (!content) return ""
-
-  return [
-    `以下是项目上下文（来自 ${candidates[0]}）：`,
-    "",
-    content
-  ].join("\n")
 }
 
 function yamlScalar(value) {
@@ -543,21 +158,6 @@ function obsidianExportPaths() {
   }
 }
 
-function responseWithConversation(chatFile, userText, assistantText, footer) {
-  const session = readSession(chatFile)
-  session.messages = session.messages.concat([
-    { role: "user", content: userText },
-    { role: "assistant", content: assistantText }
-  ])
-  writeSession(chatFile, session)
-
-  return JSON.stringify({
-    response: markdownSession(session, false),
-    footer: footer,
-    behaviour: { scroll: "end" }
-  })
-}
-
 function localAgentScriptPath() {
   const cwd = $.NSFileManager.defaultManager.currentDirectoryPath.js
   const directPath = `${cwd}/local_agent.py`
@@ -568,40 +168,12 @@ function localAgentScriptPath() {
   return "local_agent.py"
 }
 
-function workflowScriptPath(name) {
-  const base = localAgentScriptPath().replace(/local_agent\.py$/, "")
-  return `${base}${name}`
-}
-
-function spawnDetachedPython(scriptName, args) {
-  const task = $.NSTask.alloc.init
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
-  task.arguments = [workflowScriptPath(scriptName)].concat(args || [])
-  task.standardOutput = $.NSFileHandle.fileHandleWithNullDevice
-  task.standardError = $.NSFileHandle.fileHandleWithNullDevice
-  task.launchAndReturnError(false)
-}
-
-function maybeTriggerBackgroundReview(chatFile) {
-  if (envVar("memory_auto_write") === "0") return
-
-  const interval = parseInt(envVar("memory_nudge_interval")) || 10
-  const turns = countTurns(readSession(chatFile).messages)
-  if (turns === 0 || turns % interval !== 0) return
-
-  spawnDetachedPython("background_review.py", [])
-}
-
-function maybeIndexSession() {
-  spawnDetachedPython("session_index.py", [])
-}
-
 function runLocalAgentWithArguments(args) {
   const task = $.NSTask.alloc.init
   const stdout = $.NSPipe.pipe
   const stderr = $.NSPipe.pipe
 
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+  task.executableURL = $.NSURL.fileURLWithPath("/opt/homebrew/bin/python3")
   task.arguments = [localAgentScriptPath()].concat(args)
   task.standardOutput = stdout
   task.standardError = stderr
@@ -645,13 +217,11 @@ function runLocalAgentWithArguments(args) {
 }
 
 function triggerCuratorTick() {
-  // 异步(同步 spawn 但快速返回)调 --curator-tick,失败静默。
-  // 减法版: 24h 节流在 curator.py 内部,这里只触发。
   try {
     const task = $.NSTask.alloc.init
     const stdout = $.NSPipe.pipe
     const stderr = $.NSPipe.pipe
-    task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
+    task.executableURL = $.NSURL.fileURLWithPath("/opt/homebrew/bin/python3")
     task.arguments = [localAgentScriptPath(), "--curator-tick"]
     task.standardOutput = stdout
     task.standardError = stderr
@@ -665,227 +235,6 @@ function triggerCuratorTick() {
   } catch (e) {
     // 静默:curator 失败不能影响主聊天
   }
-}
-
-function runLocalAgent(typedQuery) {
-  return runLocalAgentWithArguments([typedQuery])
-}
-
-function runLocalAgentTool(toolCall) {
-  return runLocalAgentWithArguments(["--tool", JSON.stringify(toolCall)])
-}
-
-function looksLikeSkillifyQuery(text) {
-  const trimmed = text.trim()
-  return /(?:生成|创建|提炼|固化|写成|整理成|做成|转成|转化为).*(?:skill|skills|Skill|技能)/i.test(trimmed) ||
-    /(?:skill|skills|Skill|技能).*(?:生成|创建|提炼|固化|写成|整理成|做成)/i.test(trimmed) ||
-    /^\/skillify/i.test(trimmed)
-}
-
-function looksLikeLocalAgentQuery(text) {
-  const trimmed = text.trim()
-  if (looksLikeSkillifyQuery(trimmed)) {
-    return true
-  }
-
-  const fileHint = "([/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
-
-  return /^确认执行$/i.test(trimmed) ||
-    /^(取消|取消执行)$/i.test(trimmed) ||
-    /^(撤销上一步|undo last)$/i.test(trimmed) ||
-    /^@\//.test(trimmed) ||
-    /^(?:读取|查看|打开|写入|新建|创建|删除|追加|替换|列出|移动|总结)\s+\/Users\/DRLer\//i.test(trimmed) ||
-    /^\/Users\/DRLer\/[^\s]*\s*$/i.test(trimmed) ||
-    /桌面(?:上)?(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)/i.test(trimmed) ||
-    /(?:新建|创建|写入|追加|附加|替换|删除|移除|读取|查看|列出|整理|移动)(?:到)?桌面/i.test(trimmed) ||
-    new RegExp(`(创建|新建|写入|追加|附加|替换|删除|移除|读取|查看).*${fileHint}`, "i").test(trimmed) ||
-    new RegExp(`${fileHint}.*(内容|正文)[:：]`, "i").test(trimmed) ||
-    /^(列出|新增|完成)任务/i.test(trimmed) ||
-    /^记住/i.test(trimmed) ||
-    /^(你)?记住/i.test(trimmed) ||
-    /^列出记忆$/i.test(trimmed) ||
-    /^(?:查看|列出|读取|显示)?灵魂$/i.test(trimmed) ||
-    /(?:写入|更新|设定|追加)灵魂/i.test(trimmed) ||
-    /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(trimmed) ||
-    /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(trimmed) ||
-    /^搜索(?:OB|Obsidian|ob)/i.test(trimmed) ||
-    // [W8 harness-first] 反转 W7.10 决策:OB 写入 query 重新走 local_agent harness
-    // (W7.10 怕 LLM 看不到对话历史瞎说"先确认再写入" — 但实测 M3 推理模型在这步瞎说率 100%,
-    //  走 LLM 反而绕路。W1 减法版做的 parse_intent harness 才是正解,只是 chat 之前没接上)
-    /(?:新建|创建|写入|写|存|放|录|塞|追加)(?:一篇|一个|一份|到|进|给)?\s*(?:0\.inbox|10\.DL|2\.AI-Garden|3\.wiki|OB|Obsidian|ob)/i.test(trimmed) ||
-    /(?:0\.inbox|10\.DL|2\.AI-Garden|3\.wiki)\/[^\s？?。]+\.md/i.test(trimmed) ||
-    /(?:新建|创建|写入|写|存|放|录|塞|追加).*(?:OB|Obsidian|ob)(?:库|笔记|文件)?/i.test(trimmed) ||
-    /(?:OB|Obsidian|ob)(?:库|笔记|文件)?.*(?:新建|创建|写入|写|存|放|录|塞|追加)/i.test(trimmed) ||
-    /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(trimmed) ||
-    /(?:今天|今日)日记.*(内容|正文)[:：]/i.test(trimmed) ||
-    /(?:翻阅|回顾|随便读|随机读|最近|近\s*\d+\s*(?:天|篇)).*(?:日记|OB|Obsidian|ob)/i.test(trimmed) ||
-    /(读|读取|查看).*(OB|Obsidian|ob).*(今天|今日)日记/i.test(trimmed) ||
-    /^(读|读取|查看)?(今天|今日)日记$/i.test(trimmed) ||
-    /^运行命令[:：]/i.test(trimmed) ||
-    /提醒/i.test(trimmed)
-}
-
-function handleLocalFileControl(chatFile, typedQuery) {
-  if (!looksLikeLocalAgentQuery(typedQuery.trim())) return null
-
-  const result = runLocalAgent(typedQuery)
-  if (!result || !result.handled) return null
-
-  return responseWithConversation(
-    chatFile,
-    typedQuery.trim(),
-    result.assistant_text || "本地操作完成",
-    result.footer || result.assistant_text || "本地操作完成"
-  )
-}
-
-function runWorkflowPython(scriptName, args, timeoutSeconds) {
-  const task = $.NSTask.alloc.init
-  const stdout = $.NSPipe.pipe
-  const stderr = $.NSPipe.pipe
-
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/python3")
-  task.arguments = [workflowScriptPath(scriptName)].concat(args || [])
-  task.standardOutput = stdout
-  task.standardError = stderr
-  task.launchAndReturnError(false)
-
-  let waitedMs = 0
-  const limitMs = (timeoutSeconds || 30) * 1000
-  while (task.running && waitedMs < limitMs) {
-    delay(0.05)
-    waitedMs += 50
-  }
-
-  if (task.running) {
-    task.terminate()
-    return { error: "Python 脚本执行超时" }
-  }
-
-  const output = $.NSString.alloc.initWithDataEncoding(
-    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
-  const errorOutput = $.NSString.alloc.initWithDataEncoding(
-    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
-
-  if (task.terminationStatus !== 0) return { error: errorOutput || output }
-
-  try {
-    return JSON.parse(output)
-  } catch {
-    return { error: output || "Python 脚本返回异常" }
-  }
-}
-
-function runProviderBridgeComplete(provider, payload, timeoutSeconds) {
-  const bridgePayload = {
-    provider: provider.provider,
-    model: payload.model || provider.model,
-    messages: payload.messages || [],
-    temperature: payload.temperature
-  }
-  const result = runWorkflowPython("provider_bridge.py", ["--complete", JSON.stringify(bridgePayload)], timeoutSeconds)
-  if (result.error) return { error: result.error }
-  return { content: result.content || "" }
-}
-
-function runChatCompletion(provider, payload, timeoutSeconds) {
-  if (provider.apiStyle === "anthropic") {
-    return runProviderBridgeComplete(provider, payload, timeoutSeconds)
-  }
-
-  const task = $.NSTask.alloc.init
-  const stdout = $.NSPipe.pipe
-  const stderr = $.NSPipe.pipe
-  const requestPayload = Object.assign({}, payload)
-
-  if (provider.supportsThinkingParam && requestPayload.stream === false) {
-    requestPayload.thinking = { type: "disabled" }
-  }
-
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  var curlArgs = [
-    provider.endpoint,
-    "--max-time", timeoutSeconds.toString(),
-    "--silent",
-    "--header", "Content-Type: application/json"
-  ]
-  if (provider.apiKey) curlArgs.push("--header", "Authorization: Bearer " + provider.apiKey)
-  curlArgs.push("--data", JSON.stringify(requestPayload))
-  task.arguments = curlArgs
-  task.standardOutput = stdout
-  task.standardError = stderr
-  task.launchAndReturnError(false)
-
-  let waitedMs = 0
-  while (task.running && waitedMs < timeoutSeconds * 1000) {
-    delay(0.05)
-    waitedMs += 50
-  }
-
-  if (task.running) {
-    task.terminate()
-    return { error: "模型工具路由超时" }
-  }
-
-  const output = $.NSString.alloc.initWithDataEncoding(
-    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
-  const errorOutput = $.NSString.alloc.initWithDataEncoding(
-    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
-
-  if (task.terminationStatus !== 0) return { error: errorOutput || output }
-
-  try {
-    const parsed = JSON.parse(output)
-    const errorMessage = parsed["error"]?.["message"] || parsed["message"]
-    if (errorMessage) return { error: errorMessage }
-    return { content: parsed["choices"]?.[0]?.["message"]?.["content"] || "" }
-  } catch {
-    return { error: output }
-  }
-}
-
-// [W8 harness-first] 删除 W7 LLM 路由附属物 (extractJsonObject / loadToolSchemas / toolRouterPrompt)
-// — W7 整套 LLM 路由器已被 harness 接管,这三函数无 caller。
-// mayNeedModelToolUse 保留 — 它是预过滤,告诉 chat 何时用工具 (虽然工具已转到 harness,语义变了,
-// 但保留不影响行为,改天再清)。
-
-function mayNeedModelToolUse(text) {
-  if (looksLikeSkillifyQuery(text)) return false
-
-  const fileHint = "(@?\\/Users\\/DRLer\\/|^@?~\\/|[/\\\\]|(^|[\\s/\\\\])\\.env($|\\s)|\\.[A-Za-z0-9]{1,8}($|\\s))"
-  const actionWords = "(读|读取|查看|看看|打开|总结|分析|整理|搜索|查找|写入|写到|新建|创建|追加|附加|替换|删除|移除|列出|移动|撤销)"
-  const dailyActionWords = "(读|读取|查看|看看|总结|分析|整理|追加|写入|写到)"
-
-  return /(?:读|读取|查看|看看|搜索|查找|总结|分析|整理|追加|写入|写到|翻阅|回顾).*(?:OB|Obsidian|ob)/i.test(text) ||
-    /(?:OB|Obsidian|ob)库/i.test(text) ||
-    /(?:新建|创建|写入)(?:一篇|一个|一份|到)?\s*(?:0\.inbox|10\.DL)/i.test(text) ||
-    /(?:列出|查看).*(?:0\.inbox|inbox).*(?:文章|文件|笔记)/i.test(text) ||
-    new RegExp(`${dailyActionWords}[^？?\\n]{0,40}(?:今日日记|今天日记|日记)`, "i").test(text) ||
-    /(?:翻阅|回顾|随便读|随机读|最近|近\s*\d+\s*(?:天|篇)).*(?:日记)/i.test(text) ||
-    /^(?:今日日记|今天日记)$/i.test(text) ||
-    /提醒/i.test(text) ||
-    /^(?:记住|你记住|新增任务[:：]|列出任务$|完成任务\s*\d+$|撤销上一步$|undo last$|列出记忆$)/i.test(text) ||
-    /(?:搜索|查找)(?:对话|聊天记录|历史)/i.test(text) ||
-    /(?:上次|之前).*(?:讨论|聊|说过|提到)/i.test(text) ||
-    /(?:桌面|Desktop).*(?:文件|txt|md|json|yaml|yml|csv|py|js|ts|plist|读|读取|查看|看看|写入|新建|创建|删除|列出|移动|总结|分析)/i.test(text) ||
-    new RegExp(`${actionWords}[^？?\\n]{0,80}${fileHint}`, "i").test(text) ||
-    new RegExp(`${fileHint}[^？?\\n]{0,80}${actionWords}`, "i").test(text) ||
-    /(?:放|放入|存|存到|存进|存为|存一下|存入|保存|落到|录入|加到|加进|塞)[^？?\n]{0,40}(?:@?\/Users\/DRLer\/|^@?~\/|[\/\\]|(?:^|[\s\/\\])\.env(?:$|\s)|\.[A-Za-z0-9]{1,8}(?:$|\s))/i.test(text) ||    /(?:@?\/Users\/DRLer\/|^@?~\/|[\/\\]|(?:^|[\s\/\\])\.env(?:$|\s)|\.[A-Za-z0-9]{1,8}(?:$|\s))[^？?\n]{0,40}(?:放|放入|存|存到|存进|存为|存一下|存入|保存|落到|录入|加到|加进|塞)/i.test(text) ||    /(?:在|到|从|往|给)?\s*(?:0\.inbox|10\.DL|OB\s*库|OB库|Obsidian\s*库)\s*(?:里|中|下)?\s*(?:放|存|写入|保存|新建|创建|建|加|写|录)/i.test(text) ||    /(?:放|存|保存|写|建|录入|加|塞)\s*(?:一篇|一个|一份|点|些)?\s*(?:到|进|入|给|在)?\s*(?:0\.inbox|10\.DL|OB\s*库|OB库|Obsidian\s*库)/i.test(text) ||    /(?:上网|网上|联网|搜索|搜一下|搜一搜|查一下|查一查|百度|谷歌|google|bing|查查看|查查|实时|最新|不知道|不确定|什么什么样|什么是什么|哪个|谁)/i.test(text) ||
-    /(?:电视剧|电影|动漫|纪录片|综艺|演员|角色|剧情|主演|饰演|扮演|出演|演[的得]|导演|编剧|豆瓣|百科|演员表|剧情介绍|人物介绍|剧透|讲什么|设定|人设|原型|口碑|评价|影评|剧评|收视|集数|首播|大结局|番外|续集|第二季|第三季|同名|翻拍|原著|小说|漫画|演员阵容)/i.test(text) ||
-    /(?:是什么|什么是|是[哪什么]|是[什么啥]|是什么人|什么是人|是哪个人|是谁演的|谁演的|谁演|谁主演|谁[主配]演|谁[的得]|剧情是|剧情讲|讲[的得]是|讲[的得]什么|怎么|怎样|咋|资料|信息|介绍|简介|背景|出处|来源)/i.test(text) ||
-    /(?:用搜索|用web|用tavily|用联网|用百度|搜搜|搜一搜|查查看|用一下搜索|查一查|用搜索搜|查查)/i.test(text) ||
-    /(?:2024|2025|2026|2027|新剧|新片|新出|今年|去年|这剧|这部剧|那剧|那部剧|这个剧|那个剧|你看过|你听说|你听过|你[知了]解|知不知道)/i.test(text) ||
-    /https?:\/\//i.test(text)
-}
-
-// ─── W8 (harness-first): 删除 W7 整条 LLM 路由 ───
-// - decideToolUse / buildSynthesizeMessages / handleModelToolUse 全部砍掉
-// - 改由 handleLocalFileControl → local_agent.py parse_intent 接管
-// - mayNeedModelToolUse / shouldFinalizeToolResult 保留(给 web_search/web_fetch 用)
-// - 联网能力由 LLM 在 fallback 路径自动触发
-
-function providerRequiresApiKey(provider) {
-  return provider.provider !== "ollama"
 }
 
 function resolveProvider() {
@@ -984,263 +333,6 @@ function resolveProvider() {
     supportsThinkingParam: false,
     apiStyle: "openai"
   }
-}
-
-function chatPayload(model, messages, stream, supportsThinkingParam) {
-  const payload = {
-    model: model,
-    messages: messages,
-    stream: stream,
-    max_tokens: outputTokenLimit()
-  }
-
-  if (supportsThinkingParam) payload.thinking = { type: "disabled" }
-  return payload
-}
-
-function runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextChat, timeoutSeconds) {
-  const result = runChatCompletion(provider, {
-    model: provider.model,
-    messages: systemPrompt ?
-      [{ role: "system", content: systemPrompt }].concat(contextChat) :
-      contextChat,
-    stream: false
-  }, timeoutSeconds)
-
-  if (result.error) {
-    return JSON.stringify({
-      response: result.error,
-      behaviour: { response: "replacelast", scroll: "end" }
-    })
-  }
-
-  const rawText = result.content || ""
-
-  // [W9.1] M3 推理模型常 hallucinate <toolcall> 文本 — detect + 真跑 + 重答
-  const resolved = maybeResolveHallucinatedToolCall(chatFile, rawText, provider, systemPrompt, timeoutSeconds)
-  const assistantText = resolved !== null ? resolved : rawText
-
-  if (resolved === null) {
-    appendChat(chatFile, { role: "assistant", content: assistantText })
-  }
-  // 注: maybeResolveHallucinatedToolCall 已 appendChat 原 hallucinate + tool_result + (现在) final
-  // 但 final 由它内部再调 LLM 后产生, 我们也得 append final 自身
-  // (在 resolved !== null 路径下,我们这里不再 append — 已在 maybeResolve 路径中处理)
-
-  // 注: maybeResolveHallucinatedToolCall 内部已 appendChat:
-  //   1) 原 hallucinate assistant text
-  //   2) tool_result user message
-  //   3) 重答的 assistant text (如果有)
-  // 所以 resolved !== null 路径下不需要再 appendChat
-
-  // [W9.1] 修正: 把 resolved 的 final answer 也 append
-  if (resolved !== null && resolved.length > 0) {
-    appendChat(chatFile, { role: "assistant", content: resolved })
-  }
-
-  maybeTriggerBackgroundReview(chatFile)
-  maybeIndexSession()
-
-  // [W9 continuation] anthropic 路径下,如果 LLM 答到一半就停, 存 pending
-  // W9.1: 如果是 hallucinate <toolcall> (resolved !== null), 已经真跑工具+重答 → clear pending
-  if (resolved !== null) {
-    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
-  } else if (isHangingPreamble(assistantText)) {
-    try {
-      runLocalAgentWithArguments([
-        "--continuation-save",
-        typedQuery || "",
-        assistantText
-      ])
-    } catch {}
-  } else {
-    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
-  }
-
-  const session = readSession(chatFile)
-  return JSON.stringify({
-    response: markdownSession(session, false),
-    footer: provider.apiStyle === "anthropic" ? "Anthropic 使用非流式回复" : undefined,
-    behaviour: { scroll: "end" }
-  })
-}
-
-function startStream(apiEndpoint, apiKey, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, supportsThinkingParam = true) {
-  $.NSFileManager.defaultManager.createFileAtPathContentsAttributes(streamFile, undefined, undefined)
-
-  const messages = systemPrompt ?
-    [{ role: "system", content: systemPrompt }].concat(contextChat) :
-    contextChat
-
-  const task = $.NSTask.alloc.init
-  const stdout = $.NSPipe.pipe
-
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  var curlArgsStream = [
-    apiEndpoint,
-    "--max-time", streamMaxSeconds(timeoutSeconds).toString(),
-    "--silent", "--no-buffer",
-    "--header", "Content-Type: application/json"
-  ]
-  if (apiKey) curlArgsStream.push("--header", "Authorization: Bearer " + apiKey)
-  curlArgsStream.push("--data", JSON.stringify(chatPayload(model, messages, true, supportsThinkingParam)))
-  curlArgsStream.push("--output", streamFile)
-  task.arguments = curlArgsStream
-
-  task.standardOutput = stdout
-  task.launchAndReturnError(false)
-  writeFile(pidStreamFile, task.processIdentifier.toString())
-}
-
-function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
-  const streamMarker = envVar("stream_marker") === "1"
-  const streamContents = $.NSString.stringWithContentsOfFileEncodingError(streamFile, $.NSUTF8StringEncoding, undefined)
-  const streamString = (streamContents && streamContents.js) || ""
-
-  if (streamMarker) return JSON.stringify({
-    rerun: 0.1,
-    variables: { streaming_now: true, stream_marker: "0" },
-    response: "…",
-    behaviour: { response: "append" }
-  })
-
-  if (streamString.startsWith("{")) {
-    try {
-      const parsedError = JSON.parse(streamString)
-      const errorMessage = parsedError["error"]?.["message"] || parsedError["message"]
-
-      if (errorMessage) {
-        deleteFile(streamFile)
-        deleteFile(pidStreamFile)
-
-        return JSON.stringify({
-          response: errorMessage,
-          variables: { streaming_now: "0", stream_marker: "0" },
-          behaviour: { response: "replacelast" }
-        })
-      }
-
-      throw "Could not determine error message"
-    } catch {
-      console.log(streamString)
-
-      return JSON.stringify({
-        response: streamString,
-        variables: { streaming_now: "0", stream_marker: "0" },
-        behaviour: { response: "replacelast" }
-      })
-    }
-  }
-
-  const chunks = streamString
-    .split("\n")
-    .filter(item => item)
-    .map(item => item.replace(/^data: /, ""))
-    .flatMap(item => { try { return JSON.parse(item) } catch { return [] } })
-
-  const responseText = chunks
-    .map(item => item["choices"]?.[0]?.["delta"]?.["content"])
-    .filter(item => item)
-    .join("")
-  const finishReason = chunks.slice(-1)[0]?.["choices"]?.[0]?.["finish_reason"]
-
-  if (!finishReason) {
-    const idleLimitMs = streamIdleSeconds(timeoutSeconds) * 1000
-    const stalled = new Date().getTime() - fileModified(streamFile) > idleLimitMs
-
-    if (stalled) {
-      if (responseText.length > 0) appendChat(chatFile, { role: "assistant", content: responseText })
-
-      deleteFile(streamFile)
-      deleteFile(pidStreamFile)
-
-      const session = readSession(chatFile)
-      return JSON.stringify({
-        response: `${demoteMarkdownHeadings(responseText)} [Connection Stalled]`,
-        footer: "流式连接中断，回复可能不完整；可输入「继续」让助手接着写",
-        variables: { streaming_now: "0", stream_marker: "0" },
-        behaviour: { response: "replacelast", scroll: "end" }
-      })
-    }
-
-    if (streamString.length === 0) return JSON.stringify({
-      rerun: 0.1,
-      variables: { streaming_now: true }
-    })
-
-    return JSON.stringify({
-      rerun: 0.1,
-      variables: { streaming_now: true, stream_marker: "0" },
-      response: demoteMarkdownHeadings(responseText),
-      behaviour: { response: "replacelast", scroll: "end" }
-    })
-  }
-
-  const preResolvedText = finishReason === "stop" ? withHangingPreambleFallback(responseText) : responseText
-
-  // [W9.1] M3 推理模型常 hallucinate <toolcall> 文本 — detect + 真跑 + 重答
-  let resolvedText = null
-  if (finishReason === "stop" && isHallucinatedToolCall(preResolvedText)) {
-    const provider = resolveProvider()
-    if (!providerRequiresApiKey(provider) || (provider.apiKey && provider.apiKey.length > 0)) {
-      // systemPrompt 在 stream 路径没传过来 — 重读 session
-      const sessionForResolve = readSession(chatFile)
-      const contextForResolve = sessionForResolve.messages || []
-      const sysPromptForResolve = composeSystemPrompt(envVar("system_prompt") || "", "")
-      resolvedText = maybeResolveHallucinatedToolCall(
-        chatFile, preResolvedText, provider, sysPromptForResolve, timeoutSeconds
-      )
-    }
-  }
-
-  const finalText = resolvedText !== null ? resolvedText : preResolvedText
-  if (resolvedText === null) {
-    appendChat(chatFile, { role: "assistant", content: finalText })
-  }
-  // resolvedText !== null 路径下 maybeResolveHallucinatedToolCall 已 appendChat
-  if (resolvedText !== null && resolvedText.length > 0) {
-    appendChat(chatFile, { role: "assistant", content: resolvedText })
-  }
-  deleteFile(streamFile)
-  deleteFile(pidStreamFile)
-  maybeTriggerBackgroundReview(chatFile)
-  maybeIndexSession()
-
-  // [W9 continuation] 如果 LLM 答到一半就停 (isHangingPreamble),
-  // 把 last_query (从 session 最后一条 user msg 取) + last_partial 存盘
-  // [W9.1] 如果是 hallucinate <toolcall> (resolvedText !== null), 已经真跑工具+重答 → clear pending
-  if (resolvedText !== null) {
-    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
-  } else if (finishReason === "stop" && isHangingPreamble(responseText)) {
-    try {
-      const sessionForCont = readSession(chatFile)
-      const msgsForCont = sessionForCont.messages || []
-      const lastUserMsg = msgsForCont.filter(m => m.role === "user").slice(-1)[0]
-      const lastQueryForCont = lastUserMsg ? (lastUserMsg.content || "") : ""
-      runLocalAgentWithArguments([
-        "--continuation-save",
-        lastQueryForCont,
-        responseText
-      ])
-    } catch {}
-  } else {
-    // LLM 答完整了,清 pending (避免上轮的 stale pending 影响下一轮)
-    try { runLocalAgentWithArguments(["--continuation-clear"]) } catch {}
-  }
-
-  const footerText = (function() {
-    switch (finishReason) {
-      case "length": return "已达输出长度上限，可输入「继续」补全剩余内容"
-      case "content_filter": return "部分内容因安全策略被过滤"
-    }
-  })()
-
-  return JSON.stringify({
-    response: demoteMarkdownHeadings(finalText),
-    footer: footerText,
-    variables: { streaming_now: "0", stream_marker: "0" },
-    behaviour: { response: "replacelast", scroll: "end" }
-  })
 }
 
 function countTurns(messages) {
@@ -1502,11 +594,7 @@ function handleExport(chatFile, typedQuery) {
 function _pad2(n) { return n.toString().padStart(2, "0") }
 
 function ensureFreshChat(chatFile) {
-  // 当 env new_chat=1 时: 把当前 session 移到 archive,写空 chat.json。
-  // 减法版: 不依赖 plist 写文件节点,一处处理 cmd+回车 和 Add Context 两条路径。
   if (envVar("new_chat") !== "1") return
-  // rename 关键字 → 最近对话 → 触发 new_chat trigger → 8296D113 强制覆盖 new_chat=1
-  // 此时 F87E8DE0 已经把所选 archive 移到 chat.json,这里再归档会把刚 load 的对话清空 → 空白。
   if (envVar("replace_with_chat")) return
   if (!fileExists(chatFile)) {
     writeFile(chatFile, "[]")
@@ -1530,12 +618,43 @@ function ensureFreshChat(chatFile) {
   writeFile(chatFile, "[]")
 }
 
+// === W10: in-process chat harness via local_agent.py --chat ===
+function runChatHarness(typedQuery) {
+  const task = $.NSTask.alloc.init
+  const stdout = $.NSPipe.pipe
+  const stderr = $.NSPipe.pipe
+
+  task.executableURL = $.NSURL.fileURLWithPath("/opt/homebrew/bin/python3")
+  task.arguments = [localAgentScriptPath(), "--chat", typedQuery]
+  task.standardOutput = stdout
+  task.standardError = stderr
+  task.launchAndReturnError(false)
+
+  const limitMs = 300 * 1000
+  let waitedMs = 0
+  while (task.running && waitedMs < limitMs) {
+    delay(0.05)
+    waitedMs += 50
+  }
+
+  if (task.running) {
+    task.terminate()
+    return { error: "W10 chat harness 超时 (5 分钟)" }
+  }
+
+  const output = $.NSString.alloc.initWithDataEncoding(
+    stdout.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+  const errorOutput = $.NSString.alloc.initWithDataEncoding(
+    stderr.fileHandleForReading.readDataToEndOfFile, $.NSUTF8StringEncoding).js
+
+  if (task.terminationStatus !== 0) {
+    return { error: errorOutput || output || `exit ${task.terminationStatus}` }
+  }
+  return { answer: output }
+}
+
 // Main
 function run(argv) {
-  // new_chat / replace_with_chat 都是一次性信号：runMain 顶部的 ensureFreshChat
-  // 已消费 new_chat 完成归档；F87E8DE0 已消费 replace_with_chat 完成 archive↔chat 切换。
-  // 这里在最终输出里把两者都清成 "0"/""，避免它们在 Text View 变量作用域里长期残留，
-  // 否则下次 Cmd+回车 会因为 replace_with_chat 残留而跳过归档，表现就是新会话没清空。
   const out = runMain(argv)
   try {
     const parsed = JSON.parse(out)
@@ -1551,27 +670,11 @@ function run(argv) {
 
 function runMain(argv) {
   const typedQuery = argv[0]
-  const maxContext = parseInt(envVar("max_context"))
-  const timeoutSeconds = parseInt(envVar("timeout_seconds"))
-  const configuredSystemPrompt = envVar("system_prompt")
   const chatFile = `${envVar("alfred_workflow_data")}/chat.json`
-  const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
-  const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
-  const streamingNow = envVar("streaming_now") === "1"
 
   ensureFreshChat(chatFile)
 
-
-  if (streamingNow) return readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds)
-
   const session = readSession(chatFile)
-
-  if (fileExists(streamFile)) return JSON.stringify({
-    rerun: 0.1,
-    variables: { streaming_now: true, stream_marker: true },
-    response: markdownSession(session, true),
-    behaviour: { scroll: "end" }
-  })
 
   if (typedQuery.length > 0) triggerCuratorTick()
 
@@ -1592,48 +695,18 @@ function runMain(argv) {
   const exportResponse = handleExport(chatFile, typedQuery)
   if (exportResponse) return exportResponse
 
-  const localControlResponse = handleLocalFileControl(chatFile, typedQuery)
-  if (localControlResponse) return localControlResponse
+  const harnessResult = runChatHarness(typedQuery)
 
-  // [W9 continuation] 用户说"go on" / "继续" / "接着说" — 读 pending 续跑
-  if (isContinuationQuery(typedQuery)) {
-    const providerForCont = resolveProvider()
-    const sysPromptForCont = composeSystemPrompt(configuredSystemPrompt, typedQuery)
-    if (providerRequiresApiKey(providerForCont) && (!providerForCont.apiKey || providerForCont.apiKey.length === 0)) {
-      return JSON.stringify({
-        response: `**${providerForCont.providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
-        behaviour: { response: "replacelast", scroll: "end" }
-      })
-    }
-    return handleContinuation(chatFile, typedQuery, providerForCont, sysPromptForCont, timeoutSeconds)
-  }
-
-  const provider = resolveProvider()
-  const systemPrompt = composeSystemPrompt(configuredSystemPrompt, typedQuery)
-
-  if (providerRequiresApiKey(provider) && (!provider.apiKey || provider.apiKey.length === 0)) {
+  if (harnessResult.error) {
     return JSON.stringify({
-      response: `**${provider.providerName} API Key is missing.**\n\nOpen Alfred Preferences → Workflows → Alfred Chat → Configure, then add your API key.`,
+      response: `**W10 chat harness 失败:**\n\n${harnessResult.error}`,
       behaviour: { response: "replacelast", scroll: "end" }
     })
   }
 
-
-  const appendQuery = { role: "user", content: typedQuery }
-  const ongoingMessages = session.messages.concat(appendQuery)
-  const contextChat = ongoingMessages.slice(-maxContext)
-
-  appendChat(chatFile, appendQuery)
-
-  if (provider.apiStyle === "anthropic") {
-    return runCompleteChat(chatFile, typedQuery, provider, systemPrompt, contextChat, timeoutSeconds)
-  }
-
-  startStream(provider.endpoint, provider.apiKey, provider.model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds, provider.supportsThinkingParam)
-
+  const finalSession = readSession(chatFile)
   return JSON.stringify({
-    rerun: 0.1,
-    variables: { streaming_now: true, stream_marker: true },
-    response: markdownSession({ title: session.title, messages: ongoingMessages })
+    response: markdownSession(finalSession, false),
+    behaviour: { scroll: "end" }
   })
 }
