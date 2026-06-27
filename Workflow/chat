@@ -380,6 +380,25 @@ function turnListText(messages) {
 }
 
 
+// --- Thinking display (Hermes-style kaomoji) ---
+const KAWAII_THINKING = ["(｡•́︿•̀｡)", "(◔_◔)", "(¬‿¬)", "( •_•)>⌐■-■", "(⌐■_■)", "(´･_･`)", "◉_◉", "(°ロ°)", "( ˘⌣˘)♡", "ヽ(>∀<☆)☆", "٩(๑❛ᴗ❛๑)۶", "(⊙_⊙)", "(¬_¬)", "( ͡° ͜ʖ ͡°)", "ಠ_ಠ"]
+const THINKING_VERBS = ["pondering", "contemplating", "musing", "cogitating", "ruminating", "deliberating", "mulling", "reflecting", "processing", "reasoning", "analyzing", "computing", "synthesizing", "formulating", "brainstorming"]
+
+function thinkingLine() {
+  const face = KAWAII_THINKING[Math.floor(Math.random() * KAWAII_THINKING.length)]
+  const verb = THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)]
+  return `*${face} ${verb}...*`
+}
+
+function spawnHarnessAsync(typedQuery) {
+  const scriptPath = localAgentScriptPath()
+  const escaped = typedQuery.replace(/'/g, "'\\''")
+  const task = $.NSTask.alloc.init
+  task.executableURL = $.NSURL.fileURLWithPath("/bin/sh")
+  task.arguments = ["-c", `/opt/homebrew/bin/python3 '${scriptPath}' --chat '${escaped}' > /dev/null 2>&1 &`]
+  task.launchAndReturnError(false)
+}
+
 // --- /model command ---
 const VALID_MODELS = Object.freeze(["MiniMax-M3", "deepseek-v4-flash", "deepseek-v4-pro"])
 
@@ -695,18 +714,19 @@ function runMain(argv) {
   const exportResponse = handleExport(chatFile, typedQuery)
   if (exportResponse) return exportResponse
 
-  const harnessResult = runChatHarness(typedQuery)
-
-  if (harnessResult.error) {
+  if (typedQuery.length > 0) {
+    const labels = chatLabels()
+    const thinking = `${formatUserLabel(labels)}\n\n${typedQuery}\n\n${formatAssistantLabel(labels)}\n\n${thinkingLine()}\n\n`
+    const prev = markdownSession(session, false)
+    spawnHarnessAsync(typedQuery)
     return JSON.stringify({
-      response: `**W10 chat harness 失败:**\n\n${harnessResult.error}`,
-      behaviour: { response: "replacelast", scroll: "end" }
+      response: prev ? `${prev}\n\n---\n\n${thinking}` : thinking,
+      behaviour: { scroll: "end" }
     })
   }
 
-  const finalSession = readSession(chatFile)
   return JSON.stringify({
-    response: markdownSession(finalSession, false),
+    response: markdownSession(session, false),
     behaviour: { scroll: "end" }
   })
 }

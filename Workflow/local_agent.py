@@ -1751,6 +1751,15 @@ def cmd_chat(user_query: str) -> int:
     _w10_save_chat(chat_file, messages)
     # stdout 只输出最终答复 (供 Alfred 抓取)
     print(final_text)
+    # 触发 Alfred Text View 刷新 (thinking → 结果)
+    try:
+        bundle_id = os.environ.get("alfred_workflow_bundleid", "com.drlerr.alfred-chat")
+        subprocess.run([
+            "osascript", "-e",
+            f'tell application "Alfred 5" to run trigger "view_chat" in workflow "{bundle_id}"'
+        ], capture_output=True, timeout=5)
+    except Exception:
+        pass  # 刷新失败不影响对话结果
     return exit_code
 
 

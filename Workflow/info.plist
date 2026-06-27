@@ -240,6 +240,19 @@
 				<false/>
 			</dict>
 		</array>
+		<key>8296D113-E0FA-47B8-8279-E92E5E6F64B6</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>74890339-2177-4514-B0CD-9D06DF626D21</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
 		<key>879C841D-04CC-40AA-800D-689027CF0FB4</key>
 		<array>
 			<dict>
@@ -643,19 +656,6 @@
 			<dict>
 				<key>destinationuid</key>
 				<string>19467065-1FA8-4C92-9F58-797A122BE296</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>8296D113-E0FA-47B8-8279-E92E5E6F64B6</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>74890339-2177-4514-B0CD-9D06DF626D21</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -1358,6 +1358,8 @@ function run() {
 				<false/>
 				<key>variables</key>
 				<dict>
+					<key>async_chat</key>
+					<string>1</string>
 					<key>init_question</key>
 					<string>{query}</string>
 					<key>new_chat</key>
