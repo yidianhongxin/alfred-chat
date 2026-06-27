@@ -59,49 +59,12 @@
 			</dict>
 		</array>
 		<key>05B69E0A-58C2-4767-A690-8FA9BECECB57</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>67764921-B974-4D41-A880-7D7C20FEC182</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>07D6395E-9C36-4E80-899A-736B6654F06A</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>84A47CA0-9D2D-4F06-A7AD-71C5DEF87663</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
+		<array/>
 		<key>19467065-1FA8-4C92-9F58-797A122BE296</key>
 		<array>
 			<dict>
 				<key>destinationuid</key>
 				<string>F4D88498-0A97-492F-989F-26182BFEEE31</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>28D73131-7F36-436C-9FA6-988E108F7422</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>3F877D5C-BA2B-4BA1-9601-2CE9D29C31B5</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -128,19 +91,6 @@
 			<dict>
 				<key>destinationuid</key>
 				<string>BA834298-7386-4B4C-9E7D-E2D8542518B0</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>3F877D5C-BA2B-4BA1-9601-2CE9D29C31B5</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>93C97340-619A-4F67-AC74-5CC27EFAC17F</string>
 				<key>modifiers</key>
 				<integer>0</integer>
 				<key>modifiersubtext</key>
@@ -192,29 +142,6 @@
 				<false/>
 			</dict>
 		</array>
-		<key>67764921-B974-4D41-A880-7D7C20FEC182</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>28D73131-7F36-436C-9FA6-988E108F7422</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<true/>
-			</dict>
-			<dict>
-				<key>destinationuid</key>
-				<string>8296D113-E0FA-47B8-8279-E92E5E6F64B6</string>
-				<key>modifiers</key>
-				<integer>1048576</integer>
-				<key>modifiersubtext</key>
-				<string>Start new chat</string>
-				<key>vitoclose</key>
-				<true/>
-			</dict>
-		</array>
 		<key>74890339-2177-4514-B0CD-9D06DF626D21</key>
 		<array>
 			<dict>
@@ -262,31 +189,6 @@
 				<integer>0</integer>
 				<key>modifiersubtext</key>
 				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
-		<key>93C97340-619A-4F67-AC74-5CC27EFAC17F</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>19467065-1FA8-4C92-9F58-797A122BE296</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-			<dict>
-				<key>destinationuid</key>
-				<string>07D6395E-9C36-4E80-899A-736B6654F06A</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>sourceoutputuid</key>
-				<string>EEE23EA9-A86C-4E88-BDAE-416114DA280D</string>
 				<key>vitoclose</key>
 				<false/>
 			</dict>
@@ -465,18 +367,7 @@
 			</dict>
 		</array>
 		<key>C6E0966E-A4F8-4DC1-8373-F247FA06A251</key>
-		<array>
-			<dict>
-				<key>destinationuid</key>
-				<string>67764921-B974-4D41-A880-7D7C20FEC182</string>
-				<key>modifiers</key>
-				<integer>0</integer>
-				<key>modifiersubtext</key>
-				<string></string>
-				<key>vitoclose</key>
-				<false/>
-			</dict>
-		</array>
+		<array/>
 		<key>CBBF8BED-C42D-4793-8FEA-EA80FC94C493</key>
 		<array>
 			<dict>
@@ -715,92 +606,6 @@
 			<string>alfred.workflow.trigger.universalaction</string>
 			<key>uid</key>
 			<string>CBBF8BED-C42D-4793-8FEA-EA80FC94C493</string>
-			<key>version</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>argumenttype</key>
-				<integer>1</integer>
-				<key>keyword</key>
-				<string>ask</string>
-				<key>skipuniversalaction</key>
-				<true/>
-				<key>subtext</key>
-				<string>↩ Add context · ⌘↩ New chat with this question</string>
-				<key>text</key>
-				<string>ask</string>
-				<key>withspace</key>
-				<true/>
-			</dict>
-			<key>type</key>
-			<string>alfred.workflow.input.keyword</string>
-			<key>uid</key>
-			<string>67764921-B974-4D41-A880-7D7C20FEC182</string>
-			<key>version</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>conditions</key>
-				<array>
-					<dict>
-						<key>inputstring</key>
-						<string>{var:new_chat}</string>
-						<key>matchcasesensitive</key>
-						<false/>
-						<key>matchmode</key>
-						<integer>5</integer>
-						<key>matchstring</key>
-						<string></string>
-						<key>outputlabel</key>
-						<string>New Chat</string>
-						<key>uid</key>
-						<string>EEE23EA9-A86C-4E88-BDAE-416114DA280D</string>
-					</dict>
-				</array>
-				<key>elselabel</key>
-				<string>Continue</string>
-				<key>hideelse</key>
-				<false/>
-			</dict>
-			<key>type</key>
-			<string>alfred.workflow.utility.conditional</string>
-			<key>uid</key>
-			<string>93C97340-619A-4F67-AC74-5CC27EFAC17F</string>
-			<key>version</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>argument</key>
-				<string>{query}
-{var:pre_init}</string>
-				<key>passthroughargument</key>
-				<false/>
-				<key>variables</key>
-				<dict/>
-			</dict>
-			<key>type</key>
-			<string>alfred.workflow.utility.argument</string>
-			<key>uid</key>
-			<string>28D73131-7F36-436C-9FA6-988E108F7422</string>
-			<key>version</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>type</key>
-				<integer>0</integer>
-			</dict>
-			<key>type</key>
-			<string>alfred.workflow.utility.transform</string>
-			<key>uid</key>
-			<string>3F877D5C-BA2B-4BA1-9601-2CE9D29C31B5</string>
 			<key>version</key>
 			<integer>1</integer>
 		</dict>
@@ -1595,14 +1400,6 @@ function run() {
 			<string>alfred.workflow.trigger.external</string>
 			<key>uid</key>
 			<string>055D6B34-9A00-49B7-A135-3686D0911EEA</string>
-			<key>version</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>type</key>
-			<string>alfred.workflow.utility.junction</string>
-			<key>uid</key>
-			<string>07D6395E-9C36-4E80-899A-736B6654F06A</string>
 			<key>version</key>
 			<integer>1</integer>
 		</dict>
@@ -3094,10 +2891,10 @@ Override API endpoints via Workflow Environment Variables:
 		<string></string>
 	</dict>
 	<key>version</key>
-	<string>1.8.3</string>
+	<string>1.8.4</string>
 	<key>webaddress</key>
 	<string></string>
 	<key>workflow_version</key>
-	<string>W8+W9 final (W8 harness-first: 删 chat 脚本 W7 LLM 路由死代码 extractJsonObject/loadToolSchemas/toolRouterPrompt 共 62 行, 留 5 行注释; parse_intent 已有 30+ regex + 17 tools 真正接通 chat; W9 continuation 协议: pending_continuation.json 持久化 last_query+last_partial, isContinuationQuery 识别"go on/继续/接着说", runCompleteChat+readStream 在 isHangingPreamble 时自动存盘, 完整答时清 pending; 测试 scripts/test_w8_harness.py 19 项 + test_w9_continuation.py 5 项全过)</string>
+	<string>v1.8.4: real-time thinking display (Hermes-style kaomoji) + 合并 ask/chat keyword (删 pre_init 链)。W8+W9 final (W8 harness-first: 删 chat 脚本 W7 LLM 路由死代码 extractJsonObject/loadToolSchemas/toolRouterPrompt 共 62 行, 留 5 行注释; parse_intent 已有 30+ regex + 17 tools 真正接通 chat; W9 continuation 协议: pending_continuation.json 持久化 last_query+last_partial, isContinuationQuery 识别"go on/继续/接着说", runCompleteChat+readStream 在 isHangingPreamble 时自动存盘, 完整答时清 pending; 测试 scripts/test_w8_harness.py 19 项 + test_w9_continuation.py 5 项全过)</string>
 </dict>
 </plist>
